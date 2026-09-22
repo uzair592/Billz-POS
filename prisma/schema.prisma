@@ -1,0 +1,524 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
+}
+
+enum UserStatus {
+  ACTIVE
+  LOCKED
+  DEACTIVATED
+}
+
+enum SupportAccessStatus {
+  PENDING
+  APPROVED
+  REVOKED
+  EXPIRED
+}
+
+enum AuditActorType {
+  USER
+  PLATFORM_ADMIN
+  SYSTEM
+}
+
+model PlatformAdmin {
+  id                 String                 @id @default(uuid()) @db.Uuid
+  email              String                 @unique @db.VarChar(320)
+  name               String                 @db.VarChar(150)
+  passwordHash       String                 @map("password_hash")
+  isActive           Boolean                @default(true) @map("is_active")
+  mustChangePassword Boolean                @default(false) @map("must_change_password")
+  lastLoginAt        DateTime?              @map("last_login_at") @db.Timestamptz(3)
+  createdAt          DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessions           PlatformSession[]
+  supportGrants      SupportAccessGrant[]   @relation("GrantAdministrator")
+  supportSessions    SupportAccessSession[]
+  supportNotes       SupportNote[]
+
+  @@map("platform_admins")
+}
+
+model PlatformSession {
+  id              String        @id @default(uuid()) @db.Uuid
+  platformAdminId String        @map("platform_admin_id") @db.Uuid
+  tokenHash       String        @unique @map("token_hash") @db.Char(64)
+  csrfHash        String        @map("csrf_hash") @db.Char(64)
+  expiresAt       DateTime      @map("expires_at") @db.Timestamptz(3)
+  lastSeenAt      DateTime      @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  revokedAt       DateTime?     @map("revoked_at") @db.Timestamptz(3)
+  ipAddress       String?       @map("ip_address") @db.VarChar(64)
+  userAgent       String?       @map("user_agent") @db.VarChar(500)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  platformAdmin   PlatformAdmin @relation(fields: [platformAdminId], references: [id], onDelete: Cascade)
+
+  @@index([platformAdminId, expiresAt])
+  @@map("platform_sessions")
+}
+
+model SubscriptionPlan {
+  id            String                     @id @default(uuid()) @db.Uuid
+  code          String                     @unique @db.VarChar(50)
+  name          String                     @db.VarChar(100)
+  maxBranches   Int                        @map("max_branches")
+  maxUsers      Int                        @map("max_users")
+  maxDevices    Int                        @default(3) @map("max_devices")
+  isActive      Boolean                    @default(true) @map("is_active")
+  createdAt     DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  modules       PlanModule[]
+  subscriptions OrganizationSubscription[]
+
+  @@map("subscription_plans")
+}
+
+model Module {
+  id                  String               @id @default(uuid()) @db.Uuid
+  key                 String               @unique @db.VarChar(80)
+  name                String               @db.VarChar(100)
+  description         String?
+  phase               Int                  @default(1)
+  isActive            Boolean              @default(true) @map("is_active")
+  planModules         PlanModule[]
+  organizationModules OrganizationModule[]
+
+  @@map("modules")
+}
+
+model PlanModule {
+  planId   String           @map("plan_id") @db.Uuid
+  moduleId String           @map("module_id") @db.Uuid
+  plan     SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  module   Module           @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@id([planId, moduleId])
+  @@map("plan_modules")
+}
+
+model Organization {
+  id                    String                     @id @default(uuid()) @db.Uuid
+  slug                  String                     @unique @db.VarChar(80)
+  name                  String                     @db.VarChar(200)
+  legalName             String?                    @map("legal_name") @db.VarChar(200)
+  businessType          String?                    @map("business_type") @db.VarChar(50)
+  email                 String?                    @db.VarChar(320)
+  phone                 String?                    @db.VarChar(50)
+  logoUrl               String?                    @map("logo_url") @db.VarChar(1000)
+  status                OrganizationStatus         @default(ACTIVE)
+  onboardingStep        Int                        @default(0) @map("onboarding_step")
+  onboardingCompletedAt DateTime?                  @map("onboarding_completed_at") @db.Timestamptz(3)
+  createdAt             DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  branches              Branch[]
+  users                 User[]
+  roles                 Role[]
+  subscriptions         OrganizationSubscription[]
+  modules               OrganizationModule[]
+  businessSettings      BusinessSetting?
+  paymentMethods        PaymentMethod[]
+  auditLogs             AuditLog[]
+  loginAttempts         LoginAttempt[]
+  passwordResetTokens   PasswordResetToken[]
+  supportGrants         SupportAccessGrant[]
+  supportSessions       SupportAccessSession[]
+  supportNotes          SupportNote[]
+  idempotencyKeys       IdempotencyKey[]
+  files                 FileAsset[]
+  devices               OrganizationDevice[]
+
+  @@map("organizations")
+}
+
+model OrganizationSubscription {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @map("organization_id") @db.Uuid
+  planId         String             @map("plan_id") @db.Uuid
+  status         SubscriptionStatus @default(TRIALING)
+  startsAt       DateTime           @map("starts_at") @db.Timestamptz(3)
+  endsAt         DateTime?          @map("ends_at") @db.Timestamptz(3)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  plan           SubscriptionPlan   @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@map("organization_subscriptions")
+}
+
+model OrganizationModule {
+  organizationId String       @map("organization_id") @db.Uuid
+  moduleId       String       @map("module_id") @db.Uuid
+  enabled        Boolean      @default(true)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  module         Module       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, moduleId])
+  @@map("organization_modules")
+}
+
+model Branch {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @map("organization_id") @db.Uuid
+  name           String             @db.VarChar(150)
+  code           String             @db.VarChar(30)
+  address        String?
+  phone          String?            @db.VarChar(50)
+  email          String?            @db.VarChar(320)
+  timezone       String             @default("Asia/Karachi") @db.VarChar(100)
+  isPrimary      Boolean            @default(false) @map("is_primary")
+  isActive       Boolean            @default(true) @map("is_active")
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  memberships    BranchMembership[]
+  settings       BranchSetting?
+  auditLogs      AuditLog[]
+
+  @@unique([organizationId, code])
+  @@unique([id, organizationId])
+  @@index([organizationId, isActive])
+  @@map("branches")
+}
+
+model User {
+  id                  String               @id @default(uuid()) @db.Uuid
+  organizationId      String               @map("organization_id") @db.Uuid
+  username            String               @db.VarChar(80)
+  email               String?              @db.VarChar(320)
+  name                String               @db.VarChar(150)
+  phone               String?              @db.VarChar(50)
+  passwordHash        String               @map("password_hash")
+  pinHash             String?              @map("pin_hash")
+  status              UserStatus           @default(ACTIVE)
+  mustChangePassword  Boolean              @default(true) @map("must_change_password")
+  failedLoginCount    Int                  @default(0) @map("failed_login_count")
+  lockedUntil         DateTime?            @map("locked_until") @db.Timestamptz(3)
+  lastLoginAt         DateTime?            @map("last_login_at") @db.Timestamptz(3)
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  branchMemberships   BranchMembership[]
+  roles               UserRole[]
+  sessions            Session[]
+  loginAttempts       LoginAttempt[]
+  passwordResetTokens PasswordResetToken[]
+  auditLogs           AuditLog[]
+
+  @@unique([organizationId, username])
+  @@unique([organizationId, email])
+  @@unique([id, organizationId])
+  @@index([organizationId, status])
+  @@map("users")
+}
+
+model BranchMembership {
+  organizationId String  @map("organization_id") @db.Uuid
+  userId         String  @map("user_id") @db.Uuid
+  branchId       String  @map("branch_id") @db.Uuid
+  isDefault      Boolean @default(false) @map("is_default")
+  user           User    @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  branch         Branch  @relation(fields: [branchId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@id([userId, branchId])
+  @@index([organizationId, branchId])
+  @@map("branch_memberships")
+}
+
+model Role {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  key            String           @db.VarChar(80)
+  name           String           @db.VarChar(100)
+  description    String?
+  isSystem       Boolean          @default(false) @map("is_system")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  users          UserRole[]
+  permissions    RolePermission[]
+
+  @@unique([organizationId, key])
+  @@unique([id, organizationId])
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  key         String           @unique @db.VarChar(120)
+  name        String           @db.VarChar(150)
+  description String?
+  moduleKey   String           @map("module_key") @db.VarChar(80)
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  organizationId String @map("organization_id") @db.Uuid
+  userId         String @map("user_id") @db.Uuid
+  roleId         String @map("role_id") @db.Uuid
+  user           User   @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  role           Role   @relation(fields: [roleId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([organizationId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id") @db.Uuid
+  permissionId String     @map("permission_id") @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model Session {
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @map("organization_id") @db.Uuid
+  userId         String              @map("user_id") @db.Uuid
+  deviceId       String?             @map("device_id") @db.Uuid
+  tokenHash      String              @unique @map("token_hash") @db.Char(64)
+  csrfHash       String              @map("csrf_hash") @db.Char(64)
+  expiresAt      DateTime            @map("expires_at") @db.Timestamptz(3)
+  lastSeenAt     DateTime            @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  revokedAt      DateTime?           @map("revoked_at") @db.Timestamptz(3)
+  ipAddress      String?             @map("ip_address") @db.VarChar(64)
+  userAgent      String?             @map("user_agent") @db.VarChar(500)
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  user           User                @relation(fields: [userId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  device         OrganizationDevice? @relation(fields: [deviceId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@index([organizationId, userId, expiresAt])
+  @@index([organizationId, deviceId])
+  @@map("sessions")
+}
+
+model OrganizationDevice {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  deviceHash     String       @map("device_hash") @db.Char(64)
+  displayName    String       @map("display_name") @db.VarChar(160)
+  userAgent      String?      @map("user_agent") @db.VarChar(500)
+  lastIpAddress  String?      @map("last_ip_address") @db.VarChar(64)
+  firstSeenAt    DateTime     @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  lastSeenAt     DateTime     @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  revokedAt      DateTime?    @map("revoked_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sessions       Session[]
+
+  @@unique([organizationId, deviceHash])
+  @@unique([id, organizationId])
+  @@index([organizationId, revokedAt])
+  @@map("organization_devices")
+}
+
+model LoginAttempt {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String?       @map("organization_id") @db.Uuid
+  userId         String?       @map("user_id") @db.Uuid
+  identifier     String        @db.VarChar(320)
+  successful     Boolean
+  failureCode    String?       @map("failure_code") @db.VarChar(80)
+  ipAddress      String?       @map("ip_address") @db.VarChar(64)
+  userAgent      String?       @map("user_agent") @db.VarChar(500)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([identifier, createdAt])
+  @@index([ipAddress, createdAt])
+  @@map("login_attempts")
+}
+
+model PasswordResetToken {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  tokenHash      String       @unique @map("token_hash") @db.Char(64)
+  expiresAt      DateTime     @map("expires_at") @db.Timestamptz(3)
+  usedAt         DateTime?    @map("used_at") @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, userId])
+  @@map("password_reset_tokens")
+}
+
+model BusinessSetting {
+  id               String       @id @default(uuid()) @db.Uuid
+  organizationId   String       @unique @map("organization_id") @db.Uuid
+  countryCode      String       @default("PK") @map("country_code") @db.Char(2)
+  currencyCode     String       @default("PKR") @map("currency_code") @db.Char(3)
+  timezone         String       @default("Asia/Karachi") @db.VarChar(100)
+  locale           String       @default("en") @db.VarChar(20)
+  dateFormat       String       @default("DD-MM-YYYY") @map("date_format") @db.VarChar(30)
+  accentColor      String       @default("#0f766e") @map("accent_color") @db.VarChar(20)
+  taxConfig        Json         @default("{}") @map("tax_config")
+  serviceConfig    Json         @default("{}") @map("service_config")
+  orderTypes       Json         @default("[]") @map("order_types")
+  receiptConfig    Json         @default("{}") @map("receipt_config")
+  managerPinPolicy Json         @default("{}") @map("manager_pin_policy")
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("business_settings")
+}
+
+model BranchSetting {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  branchId       String   @unique @map("branch_id") @db.Uuid
+  operatingHours Json     @default("{}") @map("operating_hours")
+  printerConfig  Json     @default("{}") @map("printer_config")
+  taxOverride    Json?    @map("tax_override")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  branch         Branch   @relation(fields: [branchId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([branchId, organizationId])
+  @@index([organizationId])
+  @@map("branch_settings")
+}
+
+model PaymentMethod {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  key            String       @db.VarChar(60)
+  name           String       @db.VarChar(100)
+  type           String       @db.VarChar(40)
+  isActive       Boolean      @default(true) @map("is_active")
+  sortOrder      Int          @default(0) @map("sort_order")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key])
+  @@map("payment_methods")
+}
+
+model FileAsset {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  objectKey      String       @unique @map("object_key") @db.VarChar(700)
+  originalName   String       @map("original_name") @db.VarChar(255)
+  mimeType       String       @map("mime_type") @db.VarChar(150)
+  sizeBytes      BigInt       @map("size_bytes")
+  checksum       String?      @db.VarChar(128)
+  status         String       @default("PENDING") @db.VarChar(30)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@map("file_assets")
+}
+
+model SupportAccessGrant {
+  id               String                 @id @default(uuid()) @db.Uuid
+  organizationId   String                 @map("organization_id") @db.Uuid
+  platformAdminId  String                 @map("platform_admin_id") @db.Uuid
+  reason           String
+  status           SupportAccessStatus    @default(PENDING)
+  expiresAt        DateTime               @map("expires_at") @db.Timestamptz(3)
+  approvedByUserId String?                @map("approved_by_user_id") @db.Uuid
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization     Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  platformAdmin    PlatformAdmin          @relation("GrantAdministrator", fields: [platformAdminId], references: [id], onDelete: Restrict)
+  sessions         SupportAccessSession[]
+
+  @@index([organizationId, status, expiresAt])
+  @@map("support_access_grants")
+}
+
+model SupportAccessSession {
+  id              String             @id @default(uuid()) @db.Uuid
+  grantId         String             @map("grant_id") @db.Uuid
+  organizationId  String             @map("organization_id") @db.Uuid
+  platformAdminId String             @map("platform_admin_id") @db.Uuid
+  startedAt       DateTime           @default(now()) @map("started_at") @db.Timestamptz(3)
+  endedAt         DateTime?          @map("ended_at") @db.Timestamptz(3)
+  ipAddress       String?            @map("ip_address") @db.VarChar(64)
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  platformAdmin   PlatformAdmin      @relation(fields: [platformAdminId], references: [id], onDelete: Restrict)
+  grant           SupportAccessGrant @relation(fields: [grantId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, startedAt])
+  @@map("support_access_sessions")
+}
+
+model SupportNote {
+  id              String        @id @default(uuid()) @db.Uuid
+  organizationId  String        @map("organization_id") @db.Uuid
+  platformAdminId String        @map("platform_admin_id") @db.Uuid
+  body            String
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  platformAdmin   PlatformAdmin @relation(fields: [platformAdminId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, createdAt])
+  @@map("support_notes")
+}
+
+model IdempotencyKey {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  key            String       @db.VarChar(160)
+  operation      String       @db.VarChar(100)
+  requestHash    String       @map("request_hash") @db.Char(64)
+  responseCode   Int?         @map("response_code")
+  responseBody   Json?        @map("response_body")
+  expiresAt      DateTime     @map("expires_at") @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key, operation])
+  @@map("idempotency_keys")
+}
+
+model AuditLog {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String?        @map("organization_id") @db.Uuid
+  branchId       String?        @map("branch_id") @db.Uuid
+  userId         String?        @map("user_id") @db.Uuid
+  actorType      AuditActorType @map("actor_type")
+  actorId        String?        @map("actor_id") @db.Uuid
+  action         String         @db.VarChar(120)
+  entityType     String         @map("entity_type") @db.VarChar(100)
+  entityId       String?        @map("entity_id") @db.Uuid
+  beforeValue    Json?          @map("before_value")
+  afterValue     Json?          @map("after_value")
+  reason         String?
+  ipAddress      String?        @map("ip_address") @db.VarChar(64)
+  userAgent      String?        @map("user_agent") @db.VarChar(500)
+  correlationId  String?        @map("correlation_id") @db.Uuid
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization?  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  branch         Branch?        @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  user           User?          @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, entityType, entityId])
+  @@index([actorType, actorId, createdAt])
+  @@map("audit_logs")
+}

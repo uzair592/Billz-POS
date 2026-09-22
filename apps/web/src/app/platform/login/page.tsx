@@ -1,0 +1,8 @@
+'use client';
+
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
+import { Button, Input, Notice } from '../../../components/ui';
+import { api, saveCsrf } from '../../../lib/api';
+
+export default function PlatformLogin(){const router=useRouter();const [email,setEmail]=useState('');const[password,setPassword]=useState('');const[message,setMessage]=useState('');const[busy,setBusy]=useState(false);async function submit(e:React.FormEvent){e.preventDefault();setBusy(true);setMessage('');try{const result=await api<{csrfToken:string}>('/platform/auth/login',{method:'POST',body:JSON.stringify({email,password})},true);saveCsrf(result.csrfToken,true);router.push('/platform');}catch(error){setMessage(error instanceof Error?error.message:'Sign in failed.');}finally{setBusy(false);}}return <main className="auth-shell"><aside className="auth-aside"><div className="brand">Countertop Platform</div><div><h1>Platform operations.</h1><p>Create and administer business accounts without entering their financial workspaces.</p></div><small>All support access is explicit and audited.</small></aside><section className="auth-main"><form className="auth-form" onSubmit={submit}><h2>Administrator sign in</h2><p className="muted">Restricted platform personnel only.</p>{message&&<Notice>{message}</Notice>}<Input label="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)}/><Input label="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)}/><Button disabled={busy} style={{width:'100%'}}>{busy?'Signing in…':'Sign in securely'}</Button></form></section></main>;}

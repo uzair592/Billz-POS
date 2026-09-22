@@ -1,0 +1,31 @@
+{
+  "name": "cafe-pos",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.17.1",
+  "scripts": {
+    "build": "corepack pnpm --pm-on-fail=ignore -r build",
+    "dev": "corepack pnpm --pm-on-fail=ignore --parallel --filter @cafe-pos/api --filter @cafe-pos/web dev",
+    "lint": "corepack pnpm --pm-on-fail=ignore -r lint",
+    "test": "corepack pnpm --pm-on-fail=ignore -r test",
+    "typecheck": "corepack pnpm --pm-on-fail=ignore -r typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsc prisma/seed.ts --module commonjs --target es2022 --moduleResolution node --esModuleInterop --skipLibCheck --outDir tmp/seed && node tmp/seed/seed.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@prisma/client": "^6.7.0",
+    "argon2": "^0.41.1",
+    "prettier": "^3.5.3",
+    "prisma": "^6.7.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  },
+  "prisma": {
+    "seed": "tsc prisma/seed.ts --module commonjs --target es2022 --moduleResolution node --esModuleInterop --skipLibCheck --outDir tmp/seed && node tmp/seed/seed.js"
+  }
+}

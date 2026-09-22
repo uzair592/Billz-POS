@@ -1,0 +1,4 @@
+'use client';
+import{useQuery}from'@tanstack/react-query';import{Card,Notice}from'../../../components/ui';import{api}from'../../../lib/api';
+type Role={id:string;name:string;description?:string;isSystem:boolean;permissions:Array<{permission:{id:string;key:string;name:string}}>;_count:{users:number}};
+export default function Roles(){const q=useQuery({queryKey:['roles'],queryFn:()=>api<Role[]>('/roles')});return <><header className="topbar"><div className="page-title"><h1>Roles & permissions</h1><p>Backend-enforced capabilities for every staff role</p></div></header>{q.error&&<Notice>{q.error.message}</Notice>}<div className="grid">{q.data?.map(role=><Card key={role.id}><div className="label">{role.isSystem?'Default role':'Custom role'} · {role._count.users} users</div><h2>{role.name}</h2><p className="muted">{role.permissions.length?role.permissions.map(x=>x.permission.name).join(' · '):'No permissions assigned'}</p></Card>)}</div></>;}
