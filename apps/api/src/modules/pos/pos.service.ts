@@ -856,7 +856,16 @@ export class PosService {
     return this.prisma.withTenant(actor.organizationId, async (tx) => {
       const order = await tx.posOrder.findFirst({
         where: { id, organizationId: actor.organizationId },
-        include: { items: true, payments: true, receipt: true, refunds: true },
+        include: {
+          items: true,
+          payments: true,
+          receipt: true,
+          refunds: true,
+          branch: true,
+          organization: {
+            select: { name: true, legalName: true, phone: true, email: true },
+          },
+        },
       });
       if (!order) throw new NotFoundException("Order not found.");
       await this.branch(tx, actor, order.branchId);

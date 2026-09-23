@@ -294,6 +294,28 @@ run("Phase 3 POS acceptance", () => {
       .send(body)
       .expect(201);
     expect(retry.body.id).toBe(first.body.id);
+    const htmlReceipt = await owner
+      .get(`/api/v1/pos/orders/${first.body.id}/receipt`)
+      .expect(200)
+      .expect("Content-Type", /text\/html/);
+    expect(htmlReceipt.text).toContain("Phase 3 A");
+    expect(htmlReceipt.text).toContain("Main Branch");
+    expect(htmlReceipt.text).toContain(`Order #${first.body.orderNumber}`);
+    expect(htmlReceipt.text).toContain("Phase 3 Latte");
+    expect(htmlReceipt.text).toContain("Oat milk");
+    expect(htmlReceipt.text).toContain("Tender CASH");
+    expect(htmlReceipt.text).toContain("Tender MANUAL_CARD");
+    expect(htmlReceipt.text).toContain("Change: PKR 0.00 (0)");
+    const pdfReceipt = await owner
+      .get(`/api/v1/pos/orders/${first.body.id}/receipt?format=pdf`)
+      .expect(200)
+      .expect("Content-Type", /application\/pdf/);
+    const pdfText = pdfReceipt.body.toString("latin1");
+    expect(pdfText).toContain("Phase 3 A");
+    expect(pdfText).toContain("Phase 3 Latte");
+    expect(pdfText).toContain("Oat milk");
+    expect(pdfText).toContain("Tender CASH");
+    expect(pdfText).toContain("Tender MANUAL_CARD");
     await owner
       .post("/api/v1/pos/orders")
       .set("x-csrf-token", ownerCsrf)
@@ -367,6 +389,11 @@ run("Phase 3 POS acceptance", () => {
       .get(`/api/v1/pos/orders/${receipt.id}`)
       .expect(200);
     expect(persisted.body.items[0].unitPriceMinor).not.toBe(9999);
+    const historicalReceipt = await owner
+      .get(`/api/v1/pos/orders/${receipt.id}/receipt`)
+      .expect(200);
+    expect(historicalReceipt.text).toContain("Phase 3 Latte");
+    expect(historicalReceipt.text).toContain("PKR 11.00 (1100)");
     const allCard = await owner
       .post("/api/v1/pos/orders")
       .set("x-csrf-token", ownerCsrf)
