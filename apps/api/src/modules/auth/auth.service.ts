@@ -230,6 +230,14 @@ export class AuthService {
                 },
               });
         } else {
+          if (device.leaseExpiresAt && device.leaseExpiresAt <= now) {
+            const activeOtherDevices = await tx.organizationDevice.count({
+              where: { organizationId: user.organizationId, id: { not: device.id }, revokedAt: null, leaseExpiresAt: { gt: now } },
+            });
+            if (activeOtherDevices >= (subscription?.plan.maxDevices ?? 0)) {
+              throw new ForbiddenException({ code: "DEVICE_LIMIT_REACHED", message: `This plan allows ${subscription?.plan.maxDevices ?? 0} devices. Remove an old device before signing in on a new one.` });
+            }
+          }
           device = await tx.organizationDevice.update({
             where: { id: device.id },
             data: {

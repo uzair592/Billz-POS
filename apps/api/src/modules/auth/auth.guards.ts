@@ -81,8 +81,6 @@ export class UserAuthGuard implements CanActivate {
         message: "This account is unavailable.",
       });
     const lease = await this.prisma.withTenant(session.organizationId, tx => tx.session.findUnique({where:{id:session.id},select:{deviceId:true,device:{select:{revokedAt:true,leaseExpiresAt:true}}}}));
-    if (lease?.deviceId && (!lease.device || lease.device.revokedAt || (lease.device.leaseExpiresAt && lease.device.leaseExpiresAt <= new Date())))
-      throw new UnauthorizedException({code:'DEVICE_LEASE_EXPIRED',message:'This device lease expired. Sign in again to renew it.'});
     if (
       user.mustChangePassword &&
       user.temporaryPasswordExpiresAt &&
@@ -102,6 +100,8 @@ export class UserAuthGuard implements CanActivate {
         context.getHandler().name,
       ) ||
       (context.getClass().name === "OwnerBillingController" && isOwner);
+    if (access.allowed && (!lease?.deviceId || !lease.device || lease.device.revokedAt || (lease.device.leaseExpiresAt && lease.device.leaseExpiresAt <= new Date())))
+      throw new UnauthorizedException({code: lease?.device?.revokedAt ? "DEVICE_REVOKED" : "DEVICE_LEASE_EXPIRED",message:'This session must acquire a valid device lease before using operational features.'});
     if (!access.allowed && !recoveryRoute)
       throw new ForbiddenException({
         code: "BILLING_RESTRICTED",

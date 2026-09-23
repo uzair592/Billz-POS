@@ -154,6 +154,7 @@ model Organization {
   registers             RegisterSession[]
   orderPayments         PosOrderPayment[]
   receipts              PosReceipt[]
+  refunds               PosRefund[]
 
   @@map("organizations")
 }
@@ -594,6 +595,7 @@ model RegisterSession {
   openingFloatMinor Int @map("opening_float_minor")
   openedAt DateTime @default(now()) @map("opened_at") @db.Timestamptz(3)
   closedAt DateTime? @map("closed_at") @db.Timestamptz(3)
+  closingTotalMinor Int? @map("closing_total_minor")
   branch Branch @relation(fields:[branchId, organizationId], references:[id, organizationId], onDelete: Restrict)
   organization Organization @relation(fields:[organizationId], references:[id], onDelete: Restrict)
   orders PosOrder[]
@@ -607,12 +609,17 @@ model PosOrder {
   branchId String @map("branch_id") @db.Uuid
   registerId String? @map("register_id") @db.Uuid
   createdById String @map("created_by_id") @db.Uuid
-  orderNumber Int @map("order_number")
+  orderNumber Int @default(autoincrement()) @map("order_number")
   orderType String @default("TAKEAWAY") @map("order_type") @db.VarChar(30)
   status String @default("PAID") @db.VarChar(30)
   subtotalMinor Int @map("subtotal_minor")
   taxMinor Int @map("tax_minor")
   totalMinor Int @map("total_minor")
+  taxMode String @default("EXCLUSIVE") @map("tax_mode") @db.VarChar(20)
+  discountMinor Int @default(0) @map("discount_minor")
+  paidMinor Int @default(0) @map("paid_minor")
+  changeMinor Int @default(0) @map("change_minor")
+  refundedMinor Int @default(0) @map("refunded_minor")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   branch Branch @relation(fields:[branchId, organizationId], references:[id, organizationId], onDelete: Restrict)
   organization Organization @relation(fields:[organizationId], references:[id], onDelete: Restrict)
@@ -620,6 +627,7 @@ model PosOrder {
   items PosOrderItem[]
   payments PosOrderPayment[]
   receipt PosReceipt?
+  refunds PosRefund[]
   @@unique([organizationId, orderNumber])
   @@map("pos_orders")
 }
@@ -649,10 +657,27 @@ model PosOrderPayment {
   method String @db.VarChar(40)
   amountMinor Int @map("amount_minor")
   reference String? @db.VarChar(160)
+  tenderKind String @default("MANUAL") @map("tender_kind") @db.VarChar(20)
+  verifiedAt DateTime? @map("verified_at") @db.Timestamptz(3)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   order PosOrder @relation(fields:[orderId], references:[id], onDelete: Cascade)
   organization Organization @relation(fields:[organizationId], references:[id], onDelete: Restrict)
   @@map("pos_order_payments")
+}
+
+model PosRefund {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  orderId String @map("order_id") @db.Uuid
+  amountMinor Int @map("amount_minor")
+  reason String @db.VarChar(500)
+  disposition String @default("NO_STOCK") @db.VarChar(30)
+  createdById String @map("created_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization Organization @relation(fields:[organizationId], references:[id], onDelete:Restrict)
+  order PosOrder @relation(fields:[orderId], references:[id], onDelete:Restrict)
+  @@index([organizationId,orderId])
+  @@map("pos_refunds")
 }
 
 model PosReceipt {

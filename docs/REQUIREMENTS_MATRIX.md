@@ -6,10 +6,10 @@ Phase 3 implementation and executed checks are recorded in [PHASE_3_REPORT.md](P
 
 | Requirement group | Phase 3 status | Evidence |
 | --- | --- | --- |
-| MENU-095 | PARTIAL vertical slice implemented | `prisma/schema.prisma`, `modules/pos`, `/workspace/pos`; variants, branch prices, combos and modifier metadata are persisted |
-| PAY-103 | PARTIAL vertical slice implemented | server order total/payment equality in `pos.service.ts`; refund/split-history extensions remain |
-| TAX-108 | PARTIAL | tax basis points are calculated server-side and snapshotted per order line |
-| REC-114 | PARTIAL | tenant-scoped receipt numbers and immutable order snapshots; 80mm/PDF adapter remains |
+| MENU-095 | PASS for implemented catalog scope; combos intentionally disabled | `modules/pos`, `/workspace/menu`, `/workspace/pos`; categories, branch prices, variants, modifiers, search and historical snapshots |
+| PAY-103 | PASS for Phase 3 acceptance slice | authoritative quote, safe integer tenders, split tender, idempotency, refunds/voids and sequence-backed numbering |
+| TAX-108 | PASS for inclusive/exclusive fixture | server quote and persisted tax mode/line tax snapshots |
+| REC-114 | PASS for browser receipt formats; physical print UNVERIFIED | receipt history survives restart/price change; 80mm HTML and minimal PDF routes |
 
 ## Phase 2 evidence update — 2026-09-24
 
@@ -60,9 +60,9 @@ MASTER_SPEC.md is governing. Source references below use its preserved line numb
 | DEV | 63–76 | 2; realtime extension 4 | apps/api/src/modules/auth/auth.service.ts; apps/api/src/modules/workspace/workspace.service.ts | PARTIAL; inspection only | DEV-01 | Concurrent 1/2/3-seat tests, tabs, last logout, 30s heartbeat/5m expiry, revoke, full-seat recovery; random installation identity. |
 | IAM | 77–85 | 1 templates; 2 enforcement; extend 3–7 | apps/api/src/modules/auth/auth.guards.ts; apps/api/src/modules/workspace/workspace.service.ts | PARTIAL; inspection only | IAM-01 | Restricted manager/accountant cannot self-elevate, assign owner, cross branch or expose costs; permission removal applies next request; one-use approval. |
 | UX | 86–94 | 0 wireframes; incremental 1–7; completion 8 | apps/web/src; docs/wireframes/index.html | PARTIAL; inspection only | P0-02; REC-01 | Role-specific review at 1366x768, 1024x768, 390px; keyboard/error/retry states; >=44px touch controls; import preview rejects invalid/duplicate rows. |
-| MENU | 95–95 | 3; recipe effects 5 | none | PLANNED; inspection only | PAY-01; INV-01 | Create branch-priced variant/required modifiers/combo; invalid min/max blocked; price edits preserve historical snapshots and stock is not double counted. |
+| MENU | 95–95 | 3; recipe effects 5 | `apps/api/src/modules/pos`; `apps/web/src/app/workspace/menu` | PARTIAL; Phase 3 catalog gate passed, combos disabled | PAY-01; INV-01 | Create branch-priced variants/modifiers; price edits preserve historical snapshots. Combo stock/pricing remains Phase 5. |
 | ORD | 96–102 | 3 baseline; 4 service/kitchen | none | PLANNED; inspection only | ORD-01; REC-01 | Hold/resume, independent order/kitchen/payment states; concurrent version conflict; append delta/change ticket; split/merge only compatible unpaid checks. |
-| PAY | 103–113 | 3; credit 6; stock disposition 5 | prisma/schema.prisma (PaymentMethod/IdempotencyKey only) | PLANNED; inspection only | PAY-01; TAX-01 | Authoritative decimal totals match fixture; split/partial tender, original-allocation refund caps, unique numbering and idempotency payload conflict tested. |
+| PAY | 103–113 | 3; credit 6; stock disposition 5 | `apps/api/src/modules/pos`; `prisma/migrations/20260924000300_phase_3_integrity_checkout` | PARTIAL; Phase 3 PAY-01 slice PASS | PAY-01; TAX-01 | Authoritative integer totals, split tender, refund caps, unique numbering and idempotency tested; discounts/credit ledger remain later phases. |
 | RES | 114–119 | 4; ledger 6 | none | PLANNED; inspection only | RES-01; FIN-01 | Concurrent table overlap rejected unless explicit audited override; waitlist/advance booking persists; deposit applies once, stays liability until earned. |
 | KDS | 120–123 | 4 | none | PLANNED; inspection only | ORD-01; REC-01 | Three clients show correct station delta and delivery states; catch-up/polling preserves committed tickets without duplication. |
 | INV | 124–131 | 5 | none | PLANNED; inspection only | INV-01 | 10L milk minus 200ml preparation = 9.8L once; compatible conversions, modifier/packaging/yield and cancellation waste; immutable weighted cost; concurrency rejects insufficient stock. |
@@ -70,7 +70,7 @@ MASTER_SPEC.md is governing. Source references below use its preserved line numb
 | CASH | 136–136 | 3 basics; 6 reconciliation | none | PLANNED; inspection only | CASH-01 | One compatible active till session; cash fixture closes at 3500 with explained count variance; correction audited, noncash separate. |
 | FIN | 137–150 | 6; presentation 7 | none | PLANNED; inspection only | FIN-01 | Credit collection is not revenue twice; customer opt-in/limits/advances and expense approval/recurrence persist; journals balance, closed periods reject edits; unique source backfill reconciles. |
 | REP | 151–160 | 7 | none | PLANNED; inspection only | REP-01; ISO-01 | Same timezone/day filters reconcile every dashboard/drilldown/export to posted sources; unauthorized fields absent; spreadsheet injection blocked; large export link expires. |
-| PRINT | 161–167 | 3 baseline receipts; 4 KDS; 8 hardware/PWA | none | PLANNED; inspection only | REC-01 | 58/80mm/A4/PDF totals match stored receipt; retry/reprint audited, printer failure preserves sale; exact physical OS/model evidence, no raw card data. |
+| PRINT | 161–167 | 3 baseline receipts; 4 KDS; 8 hardware/PWA | `apps/api/src/modules/pos/pos.controller.ts` | PARTIAL; browser 80mm/PDF PASS, physical hardware UNVERIFIED | REC-01 | Stored receipt reprints after restart/price change; browser print baseline is implemented, hardware adapter remains later. |
 | OFF | 168–169 | 3 online failure; 11 offline | none | PLANNED; inspection only | REC-01 | Connection loss prevents unsafe submission; later approved offline model tests replay, expiry, clock tampering, revocation and visible conflict queue. |
 | EXT | 170–176 | 10 separately selected | none | PLANNED; inspection only | ISO-01; REC-01 | Public scoped tokens reject abuse/cross-tenant requests; loyalty reversals and promotions reconcile; official providers require real sandbox evidence, signed deduplicated webhooks and consent. |
 | MULTI | 177–177 | 5 transfers; 7 consolidation | none | PLANNED; inspection only | ISO-01; REP-01 | Consolidation and transfers include only authorized licensed branches; currency handling explicit. |

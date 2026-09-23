@@ -26,6 +26,7 @@ const navigation = [
   },
   { href: "/workspace", label: "Overview", icon: Building2 },
   { href: "/workspace/pos", label: "Point of sale", icon: ClipboardList },
+  { href: "/workspace/menu", label: "Menu", icon: ClipboardList },
   { href: "/workspace/branches", label: "Branches", icon: Building2 },
   { href: "/workspace/employees", label: "Employees", icon: Users },
   { href: "/workspace/roles", label: "Roles & permissions", icon: Shield },
