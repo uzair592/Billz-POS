@@ -213,6 +213,19 @@ export class BillingService {
     });
   }
 
+  downgradePreview(adminId:string,organizationId:string,planId:string){
+    return this.prisma.withPlatform(adminId,async tx=>{
+      const plan=await tx.subscriptionPlan.findFirst({where:{id:planId,isActive:true}});if(!plan)throw new NotFoundException('Plan not found.');
+      const [branches,users,devices,modules]=await Promise.all([
+        tx.branch.findMany({where:{organizationId,isActive:true},select:{id:true,name:true}}),
+        tx.user.findMany({where:{organizationId,status:'ACTIVE'},select:{id:true,name:true}}),
+        tx.organizationDevice.findMany({where:{organizationId,revokedAt:null,leaseExpiresAt:{gt:new Date()}},select:{id:true,displayName:true}}),
+        tx.organizationModule.findMany({where:{organizationId},include:{module:true}}),
+      ]);
+      return {plan:{id:plan.id,name:plan.name,maxBranches:plan.maxBranches,maxUsers:plan.maxUsers,maxDevices:plan.maxDevices},conflicts:{branches:branches.length>plan.maxBranches?branches:[],users:users.length>plan.maxUsers?users:[],devices:devices.length>plan.maxDevices?devices:[],modules:modules.filter(item=>item.module.phase>1).map(item=>({id:item.moduleId,name:item.module.name}))},usage:{branches:branches.length,users:users.length,devices:devices.length}};
+    });
+  }
+
   async summary(organizationId: string, adminId?: string) {
     const work = async (
       tx: import("../../database/prisma.service").TransactionClient,

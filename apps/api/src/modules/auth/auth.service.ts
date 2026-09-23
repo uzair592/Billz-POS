@@ -184,6 +184,7 @@ export class AuthService {
     const session = await this.prisma.withTenant(
       user.organizationId,
       async (tx) => {
+        await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${user.organizationId}::uuid FOR UPDATE`;
         if (!access.allowed) {
           return tx.session.create({
             data: {
@@ -204,9 +205,13 @@ export class AuthService {
             },
           },
         });
-        if (!device || device.revokedAt) {
+        const now = new Date();
+        if (device?.revokedAt) {
+          throw new ForbiddenException({ code: "DEVICE_REVOKED", message: "This installation was revoked. Use a new device or ask the owner to recover it." });
+        }
+        if (!device) {
           const registeredDevices = await tx.organizationDevice.count({
-            where: { organizationId: user.organizationId, revokedAt: null },
+            where: { organizationId: user.organizationId, revokedAt: null, leaseExpiresAt: { gt: now } },
           });
           if (registeredDevices >= (subscription?.plan.maxDevices ?? 0)) {
             throw new ForbiddenException({
@@ -214,24 +219,14 @@ export class AuthService {
               message: `This plan allows ${subscription?.plan.maxDevices ?? 0} devices. Remove an old device before signing in on a new one.`,
             });
           }
-          device = device
-            ? await tx.organizationDevice.update({
-                where: { id: device.id },
-                data: {
-                  revokedAt: null,
-                  displayName: deviceName(metadata.userAgent),
-                  userAgent: metadata.userAgent,
-                  lastIpAddress: metadata.ipAddress,
-                  lastSeenAt: new Date(),
-                },
-              })
-            : await tx.organizationDevice.create({
+          device = await tx.organizationDevice.create({
                 data: {
                   organizationId: user.organizationId,
                   deviceHash,
                   displayName: deviceName(metadata.userAgent),
                   userAgent: metadata.userAgent,
                   lastIpAddress: metadata.ipAddress,
+                  leaseExpiresAt: new Date(Date.now() + 5 * 60_000),
                 },
               });
         } else {
@@ -242,6 +237,7 @@ export class AuthService {
               userAgent: metadata.userAgent,
               lastIpAddress: metadata.ipAddress,
               lastSeenAt: new Date(),
+              leaseExpiresAt: new Date(Date.now() + 5 * 60_000),
             },
           });
         }
@@ -315,12 +311,27 @@ export class AuthService {
   }
 
   async logout(sessionId: string, organizationId: string) {
-    await this.prisma.withTenant(organizationId, (tx) =>
-      tx.session.updateMany({
-        where: { id: sessionId, revokedAt: null },
-        data: { revokedAt: new Date() },
-      }),
-    );
+    await this.prisma.withTenant(organizationId, async tx => {
+      const session = await tx.session.findFirst({ where: { id: sessionId, revokedAt: null }, select: { deviceId: true } });
+      await tx.session.updateMany({ where: { id: sessionId, revokedAt: null }, data: { revokedAt: new Date(), lastSeenAt: new Date() } });
+      if (session?.deviceId) {
+        const remaining = await tx.session.count({ where: { deviceId: session.deviceId, revokedAt: null, expiresAt: { gt: new Date() } } });
+        if (!remaining) await tx.organizationDevice.updateMany({ where: { id: session.deviceId, organizationId }, data: { leaseExpiresAt: new Date(), lastSeenAt: new Date() } });
+      }
+    });
+  }
+
+  async heartbeat(sessionId:string, organizationId:string, metadata:Metadata) {
+    return this.prisma.withTenant(organizationId, async tx => {
+      const session=await tx.session.findFirst({where:{id:sessionId,revokedAt:null,expiresAt:{gt:new Date()}},select:{deviceId:true}});
+      if(!session?.deviceId) throw new UnauthorizedException({code:'DEVICE_REQUIRED',message:'This session has no device lease.'});
+      const device=await tx.organizationDevice.findFirst({where:{id:session.deviceId,organizationId,revokedAt:null}});
+      if(!device) throw new UnauthorizedException({code:'DEVICE_REVOKED',message:'This device was revoked.'});
+      const now=new Date(); const leaseExpiresAt=new Date(now.getTime()+5*60_000);
+      await tx.organizationDevice.update({where:{id:device.id},data:{lastSeenAt:now,leaseExpiresAt,lastIpAddress:metadata.ipAddress,userAgent:metadata.userAgent}});
+      await tx.session.update({where:{id:sessionId},data:{lastSeenAt:now}});
+      return {success:true,leaseExpiresAt};
+    });
   }
 
   async changePassword(

@@ -80,6 +80,9 @@ export class UserAuthGuard implements CanActivate {
         code: "ACCOUNT_UNAVAILABLE",
         message: "This account is unavailable.",
       });
+    const lease = await this.prisma.withTenant(session.organizationId, tx => tx.session.findUnique({where:{id:session.id},select:{deviceId:true,device:{select:{revokedAt:true,leaseExpiresAt:true}}}}));
+    if (lease?.deviceId && (!lease.device || lease.device.revokedAt || (lease.device.leaseExpiresAt && lease.device.leaseExpiresAt <= new Date())))
+      throw new UnauthorizedException({code:'DEVICE_LEASE_EXPIRED',message:'This device lease expired. Sign in again to renew it.'});
     if (
       user.mustChangePassword &&
       user.temporaryPasswordExpiresAt &&

@@ -146,6 +146,7 @@ model Organization {
   idempotencyKeys       IdempotencyKey[]
   files                 FileAsset[]
   devices               OrganizationDevice[]
+  approvalChallenges    ApprovalChallenge[]
   billingInvoices       BillingInvoice[]
 
   @@map("organizations")
@@ -328,6 +329,8 @@ model Role {
   name           String           @db.VarChar(100)
   description    String?
   isSystem       Boolean          @default(false) @map("is_system")
+  scope          Json             @default("{}")
+  approvalLimitMinor Int?         @map("approval_limit_minor")
   createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
   organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -337,6 +340,22 @@ model Role {
   @@unique([organizationId, key])
   @@unique([id, organizationId])
   @@map("roles")
+}
+
+model ApprovalChallenge {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  action         String   @db.VarChar(100)
+  payloadHash    String   @map("payload_hash") @db.Char(64)
+  amountMinor    Int?     @map("amount_minor")
+  requestedById  String   @map("requested_by_id") @db.Uuid
+  approvedById   String?  @map("approved_by_id") @db.Uuid
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
+  consumedAt     DateTime? @map("consumed_at") @db.Timestamptz(3)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields:[organizationId],references:[id],onDelete:Restrict)
+  @@index([organizationId,action,expiresAt])
+  @@map("approval_challenges")
 }
 
 model Permission {
@@ -403,6 +422,7 @@ model OrganizationDevice {
   firstSeenAt    DateTime     @default(now()) @map("first_seen_at") @db.Timestamptz(3)
   lastSeenAt     DateTime     @default(now()) @map("last_seen_at") @db.Timestamptz(3)
   revokedAt      DateTime?    @map("revoked_at") @db.Timestamptz(3)
+  leaseExpiresAt DateTime?    @map("lease_expires_at") @db.Timestamptz(3)
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   sessions       Session[]
 

@@ -62,6 +62,7 @@ export class PlatformBillingController {
   ) {
     return this.billing.summary(id, admin.platformAdminId);
   }
+  @Get(":id/downgrade-preview/:planId") downgradePreview(@CurrentPlatformAdmin() admin:PlatformPrincipal,@Param('id',ParseUUIDPipe) id:string,@Param('planId',ParseUUIDPipe) planId:string){return this.billing.downgradePreview(admin.platformAdminId,id,planId);}
   @Post(":id/invoices") issue(
     @CurrentPlatformAdmin() admin: PlatformPrincipal,
     @Param("id", ParseUUIDPipe) id: string,
