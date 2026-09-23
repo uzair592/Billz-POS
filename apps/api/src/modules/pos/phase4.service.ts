@@ -527,8 +527,8 @@ export class Phase4Service {
       this.orderAccess(actor, order, "edit");
       if (
         order.orderType !== "DINE_IN" ||
-        order.status === "PAID" ||
-        order.serviceStatus === "CLOSED"
+        !["UNPAID", "OPEN"].includes(order.status) ||
+        ["CLOSED", "VOID", "CANCELLED", "PAID"].includes(order.serviceStatus)
       )
         throw new ConflictException(
           "Only an open dine-in order can be transferred.",
@@ -554,11 +554,20 @@ export class Phase4Service {
             organizationId: actor.organizationId,
             status: "ACTIVE",
             branchMemberships: { some: { branchId: order.branchId } },
+            roles: {
+              some: {
+                role: {
+                  permissions: {
+                    some: { permission: { key: "orders.dinein.create" } },
+                  },
+                },
+              },
+            },
           },
         });
         if (!waiter)
           throw new BadRequestException(
-            "Target waiter is not assigned to this branch.",
+            "Target waiter is not active, assigned to this branch, and permitted to serve tables.",
           );
       }
       const updated = await tx.posOrder.update({

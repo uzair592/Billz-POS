@@ -14,6 +14,14 @@ run("Phase 4 dine-in acceptance", () => {
   const db = new PrismaClient();
   let admin: ReturnType<typeof request.agent>;
   let owner: ReturnType<typeof request.agent>;
+  let waiterA: ReturnType<typeof request.agent>;
+  let waiterB: ReturnType<typeof request.agent>;
+  let manager: ReturnType<typeof request.agent>;
+  let waiterACsrf = "",
+    waiterBCsrf = "",
+    managerCsrf = "",
+    waiterAId = "",
+    waiterBId = "";
   let csrf = "";
   let orgId = "";
   let branchId = "";
@@ -89,6 +97,49 @@ run("Phase 4 dine-in acceptance", () => {
       csrf = login.body.csrfToken;
     }
     branchId = (await owner.get("/api/v1/branches").expect(200)).body[0].id;
+    const waiterRole = await db.role.findFirstOrThrow({
+      where: { organizationId: orgId, key: "waiter" },
+    });
+    const managerRole = await db.role.findFirstOrThrow({
+      where: { organizationId: orgId, key: "manager" },
+    });
+    const staffPassword = await hashPassword("Phase4-Staff-2026!");
+    const makeStaff = async (username: string, name: string, roleId: string) =>
+      db.user.create({
+        data: {
+          organizationId: orgId,
+          username,
+          name,
+          passwordHash: staffPassword,
+          mustChangePassword: false,
+          branchMemberships: {
+            create: { branchId, isDefault: true },
+          },
+          roles: { create: { roleId } },
+        },
+      });
+    const a = await makeStaff(`waiter-a-${suffix}`, "Waiter A", waiterRole.id);
+    const b = await makeStaff(`waiter-b-${suffix}`, "Waiter B", waiterRole.id);
+    await makeStaff(`manager-${suffix}`, "Manager", managerRole.id);
+    waiterAId = a.id;
+    waiterBId = b.id;
+    const loginStaff = async (username: string) => {
+      const agent = request.agent(app.getHttpServer());
+      const response = await agent
+        .post("/api/v1/auth/login")
+        .send({ identifier: username, password: "Phase4-Staff-2026!" })
+        .expect(201);
+      return { agent, csrf: response.body.csrfToken as string };
+    };
+    ({ agent: waiterA, csrf: waiterACsrf } = await loginStaff(
+      `waiter-a-${suffix}`,
+    ));
+    ({ agent: waiterB, csrf: waiterBCsrf } = await loginStaff(
+      `waiter-b-${suffix}`,
+    ));
+    ({ agent: manager, csrf: managerCsrf } = await loginStaff(
+      `manager-${suffix}`,
+    ));
     productId = (
       await owner
         .post("/api/v1/pos/products")
@@ -176,9 +227,70 @@ run("Phase 4 dine-in acceptance", () => {
       .send(body);
     expect(retry.status).toBe(409);
   });
+  it("denies guessed waiter IDs and authorizes audited reassignment", async () => {
+    const source = (
+      await owner
+        .post("/api/v1/phase4/tables")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, name: `WA-${suffix}`, capacity: 2 })
+        .expect(201)
+    ).body;
+    const target = (
+      await owner
+        .post("/api/v1/phase4/tables")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, name: `WB-${suffix}`, capacity: 2 })
+        .expect(201)
+    ).body;
+    const opened = await waiterA
+      .post("/api/v1/phase4/dine-in/orders")
+      .set("x-csrf-token", waiterACsrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        branchId,
+        tableId: source.id,
+        stationId,
+        items: [{ productId, quantity: 1 }],
+      })
+      .expect(201);
+    const orderId = opened.body.order.id;
+    await waiterB.get(`/api/v1/phase4/dine-in/orders/${orderId}`).expect(403);
+    await waiterB
+      .post(`/api/v1/phase4/dine-in/orders/${orderId}/additions`)
+      .set("x-csrf-token", waiterBCsrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        stationId,
+        expectedVersion: 1,
+        items: [{ productId, quantity: 1 }],
+      })
+      .expect(403);
+    await manager
+      .post(`/api/v1/phase4/dine-in/orders/${orderId}/transfer`)
+      .set("x-csrf-token", managerCsrf)
+      .set("Idempotency-Key", `transfer-${suffix}`)
+      .send({ tableId: target.id, waiterId: waiterBId })
+      .expect(201);
+    await waiterA.get(`/api/v1/phase4/dine-in/orders/${orderId}`).expect(403);
+    await waiterB.get(`/api/v1/phase4/dine-in/orders/${orderId}`).expect(200);
+    const saved = await db.posOrder.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    expect(saved.createdById).toBe(waiterBId);
+    expect(saved.tableId).toBe(target.id);
+    expect(saved.version).toBe(2);
+    expect(
+      (await db.floorTable.findUniqueOrThrow({ where: { id: source.id } }))
+        .status,
+    ).toBe("AVAILABLE");
+  });
   it("rejects non-dine-in settlement and settles eligible order once", async () => {
     const order = await db.posOrder.findFirstOrThrow({
-      where: { organizationId: orgId, orderType: "DINE_IN" },
+      where: {
+        organizationId: orgId,
+        orderType: "DINE_IN",
+        createdById: { notIn: [waiterAId, waiterBId] },
+      },
     });
     await owner
       .post(`/api/v1/phase4/dine-in/orders/${order.id}/transfer`)

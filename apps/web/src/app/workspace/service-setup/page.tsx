@@ -15,6 +15,12 @@ export default function ServiceSetupPage() {
   const [error, setError] = useState("");
   const [transferOrderId, setTransferOrderId] = useState("");
   const [transferTableId, setTransferTableId] = useState("");
+  const [transferCommand, setTransferCommand] = useState<{
+    key: string;
+    orderId: string;
+    body: any;
+  } | null>(null);
+  const [transferPending, setTransferPending] = useState(false);
   const refresh = async (id: string) => {
     const [t, s, o] = await Promise.all([
       api<any[]>(`/phase4/tables?branchId=${id}`),
@@ -69,15 +75,26 @@ export default function ServiceSetupPage() {
     }
   }
   async function transferOrder() {
+    const frozen = transferCommand ?? {
+      key: crypto.randomUUID(),
+      orderId: transferOrderId,
+      body: { tableId: transferTableId },
+    };
+    setTransferCommand(frozen);
+    setTransferPending(true);
+    setError("");
     try {
-      await api(`/phase4/dine-in/orders/${transferOrderId}/transfer`, {
+      await api(`/phase4/dine-in/orders/${frozen.orderId}/transfer`, {
         method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ tableId: transferTableId }),
+        headers: { "Idempotency-Key": frozen.key },
+        body: JSON.stringify(frozen.body),
       });
+      setTransferCommand(null);
       await refresh(branchId);
     } catch (e: any) {
-      setError(e.message);
+      setError(`Transfer was not confirmed. Retry safely: ${e.message}`);
+    } finally {
+      setTransferPending(false);
     }
   }
   return (
@@ -139,7 +156,9 @@ export default function ServiceSetupPage() {
           Order
           <select
             value={transferOrderId}
-            onChange={(e) => setTransferOrderId(e.target.value)}
+            onChange={(e) => {
+              if (!transferCommand) setTransferOrderId(e.target.value);
+            }}
           >
             {orders.map((order) => (
               <option key={order.id} value={order.id}>
@@ -152,7 +171,9 @@ export default function ServiceSetupPage() {
           Available table
           <select
             value={transferTableId}
-            onChange={(e) => setTransferTableId(e.target.value)}
+            onChange={(e) => {
+              if (!transferCommand) setTransferTableId(e.target.value);
+            }}
           >
             {tables
               .filter((table) => table.status === "AVAILABLE")
@@ -164,10 +185,14 @@ export default function ServiceSetupPage() {
           </select>
         </label>
         <Button
-          disabled={!transferOrderId || !transferTableId}
+          disabled={transferPending || !transferOrderId || !transferTableId}
           onClick={transferOrder}
         >
-          Transfer table
+          {transferPending
+            ? "Transferring…"
+            : transferCommand
+              ? "Retry same transfer"
+              : "Transfer table"}
         </Button>
       </Card>
       {error && <p role="alert">{error}</p>}
