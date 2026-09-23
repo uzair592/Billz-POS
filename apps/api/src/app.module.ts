@@ -6,6 +6,7 @@ import { HealthController } from './health.controller';
 import { AuthModule } from './modules/auth/auth.module';
 import { PlatformModule } from './modules/platform/platform.module';
 import { WorkspaceModule } from './modules/workspace/workspace.module';
+import { PosModule } from './modules/pos/pos.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { WorkspaceModule } from './modules/workspace/workspace.module';
     AuthModule,
     PlatformModule,
     WorkspaceModule,
+    PosModule,
   ],
   controllers: [HealthController],
 })
