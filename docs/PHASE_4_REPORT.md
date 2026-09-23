@@ -48,3 +48,5 @@ Additional verification from `cb51f22` onward:
 - `corepack pnpm typecheck` — passed.
 - Bounded Phase 3 Jest command (`RUN_DATABASE_TESTS=true`, 10-second bound) — timed out before test output; the child process was then force-stopped. No pass is claimed.
 - Bounded production build (`corepack pnpm build`, 10-second bound) — timed out after Next.js reported “Creating an optimized production build”; no final exit code was produced. No build pass is claimed.
+
+CI repair from `2bb616c`: all three Phase 4 pages were formatted and the cashier `Input` now supplies its required `label` prop. `corepack pnpm build` was rerun without the short timeout and completed with exit code 0; Next.js compiled, type-checked, generated 24 static pages, and the API build completed. `corepack pnpm --filter @cafe-pos/web exec tsc --noEmit` also exited 0. GitHub Actions follow-up inspection remains required after push.
