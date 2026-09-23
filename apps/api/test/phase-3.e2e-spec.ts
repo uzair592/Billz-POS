@@ -300,6 +300,44 @@ run("Phase 3 POS acceptance", () => {
       .set("Idempotency-Key", `order-${suffix}`)
       .send({ ...body, payments: [{ method: "CASH", amountMinor: 1210 }] })
       .expect(409);
+    await owner
+      .post("/api/v1/pos/orders")
+      .set("x-csrf-token", ownerCsrf)
+      .set("Idempotency-Key", `invalid-split-${suffix}`)
+      .send({
+        branchId: branchA,
+        registerId,
+        items: [{ productId, quantity: 1 }],
+        payments: [
+          { method: "CASH", amountMinor: 1 },
+          { method: "MANUAL_CARD", amountMinor: 1200 },
+        ],
+      })
+      .expect(400);
+    const uncertainKey = `uncertain-${suffix}`;
+    const uncertainBody = {
+      branchId: branchA,
+      registerId,
+      items: [{ productId, quantity: 1 }],
+      payments: [{ method: "CASH", amountMinor: 1100 }],
+    };
+    await owner
+      .post("/api/v1/pos/orders")
+      .set("x-csrf-token", ownerCsrf)
+      .set("Idempotency-Key", uncertainKey)
+      .send(uncertainBody);
+    const uncertainRetry = await owner
+      .post("/api/v1/pos/orders")
+      .set("x-csrf-token", ownerCsrf)
+      .set("Idempotency-Key", uncertainKey)
+      .send(uncertainBody)
+      .expect(201);
+    expect(
+      await db.posOrder.count({
+        where: { organizationId: orgId, id: uncertainRetry.body.id },
+      }),
+    ).toBe(1);
+    expect(uncertainRetry.body.receipt.id).toBeTruthy();
   });
   it("keeps concurrent order numbers unique, preserves receipt after price change/restart, and caps refunds", async () => {
     const make = (key: string) =>
@@ -405,6 +443,18 @@ run("Phase 3 POS acceptance", () => {
         payments: [],
       })
       .expect(201);
+    await owner
+      .post(`/api/v1/pos/orders/${held.body.id}/resume`)
+      .set("x-csrf-token", ownerCsrf)
+      .set("Idempotency-Key", `resume-invalid-split-${suffix}`)
+      .send({
+        registerId,
+        payments: [
+          { method: "CASH", amountMinor: 1 },
+          { method: "MANUAL_CARD", amountMinor: 1200 },
+        ],
+      })
+      .expect(400);
     await owner
       .post(`/api/v1/pos/orders/${held.body.id}/resume`)
       .set("x-csrf-token", ownerCsrf)

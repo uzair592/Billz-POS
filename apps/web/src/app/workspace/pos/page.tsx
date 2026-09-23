@@ -42,7 +42,10 @@ export default function PosPage() {
   const [openingFloat, setOpeningFloat] = useState("0");
   const [cardTender, setCardTender] = useState("0");
   const [message, setMessage] = useState("");
-  const [checkoutKey, setCheckoutKey] = useState<string | null>(null);
+  const [checkoutCommand, setCheckoutCommand] = useState<{
+    key: string;
+    body: Record<string, unknown>;
+  } | null>(null);
   const branches = useQuery({
     queryKey: ["branches"],
     queryFn: () => api<Branch[]>("/branches"),
@@ -99,37 +102,18 @@ export default function PosPage() {
     onError: (e: Error) => setMessage(e.message),
   });
   const sale = useMutation({
-    mutationFn: async () => {
-      const total = quote.data?.totalMinor ?? 0;
-      const card = Math.round(Number(cardTender || 0) * 100);
-      const cash = total - card;
-      const payments = [
-        { method: "CASH", amountMinor: cash },
-        ...(card > 0 ? [{ method: "MANUAL_CARD", amountMinor: card }] : []),
-      ].filter((p) => p.amountMinor > 0);
-      return api<{ id: string; receipt: { receiptNumber: string } }>(
-        "/pos/orders",
-        {
-          method: "POST",
-          headers: { "Idempotency-Key": checkoutKey! },
-          body: JSON.stringify({
-            branchId,
-            registerId,
-            orderType: "TAKEAWAY",
-            items: cart.map((i) => ({
-              productId: i.product.id,
-              variantId: i.variantId,
-              quantity: i.quantity,
-              modifiers: i.modifierIds.map((id) => ({ id })),
-            })),
-            payments,
-          }),
-        },
-      );
-    },
+    mutationFn: async (command: {
+      key: string;
+      body: Record<string, unknown>;
+    }) =>
+      api<{ id: string; receipt: { receiptNumber: string } }>("/pos/orders", {
+        method: "POST",
+        headers: { "Idempotency-Key": command.key },
+        body: JSON.stringify(command.body),
+      }),
     onSuccess: (r) => {
       setCart([]);
-      setCheckoutKey(null);
+      setCheckoutCommand(null);
       setCardTender("0");
       setMessage(
         `Sale completed: ${r.receipt.receiptNumber}. Order ${r.id.slice(0, 8)} is ready to reprint.`,
@@ -142,7 +126,7 @@ export default function PosPage() {
     if (activeRegister && !registerId) setRegisterId(activeRegister.id);
   }, [activeRegister, registerId]);
   useEffect(() => {
-    setCheckoutKey(null);
+    setCheckoutCommand(null);
   }, [branchId, registerId, cart, cardTender]);
   const total = quote.data?.totalMinor ?? 0;
   const card = Math.round(Number(cardTender || 0) * 100);
@@ -339,11 +323,35 @@ export default function PosPage() {
           <Button
             disabled={!canPay}
             onClick={() => {
-              if (!checkoutKey) setCheckoutKey(crypto.randomUUID());
-              setTimeout(() => sale.mutate(), 0);
+              const command = checkoutCommand ?? {
+                key: crypto.randomUUID(),
+                body: {
+                  branchId,
+                  registerId,
+                  orderType: "TAKEAWAY",
+                  items: cart.map((i) => ({
+                    productId: i.product.id,
+                    variantId: i.variantId,
+                    quantity: i.quantity,
+                    modifiers: i.modifierIds.map((id) => ({ id })),
+                  })),
+                  payments: [
+                    { method: "CASH", amountMinor: cash },
+                    ...(card > 0
+                      ? [{ method: "MANUAL_CARD", amountMinor: card }]
+                      : []),
+                  ].filter((payment) => payment.amountMinor > 0),
+                },
+              };
+              setCheckoutCommand(command);
+              sale.mutate(command);
             }}
           >
-            {sale.isPending ? "Processing…" : "Complete sale"}
+            {sale.isPending
+              ? "Processing…"
+              : checkoutCommand
+                ? "Retry checkout"
+                : "Complete sale"}
           </Button>
         </Card>
       </div>
