@@ -1,5 +1,16 @@
 # Requirements matrix — Phase 0
 
+## Phase 3 evidence update — 2026-09-24
+
+Phase 3 implementation and executed checks are recorded in [PHASE_3_REPORT.md](PHASE_3_REPORT.md).
+
+| Requirement group | Phase 3 status | Evidence |
+| --- | --- | --- |
+| MENU-095 | PARTIAL vertical slice implemented | `prisma/schema.prisma`, `modules/pos`, `/workspace/pos`; variants, branch prices, combos and modifier metadata are persisted |
+| PAY-103 | PARTIAL vertical slice implemented | server order total/payment equality in `pos.service.ts`; refund/split-history extensions remain |
+| TAX-108 | PARTIAL | tax basis points are calculated server-side and snapshotted per order line |
+| REC-114 | PARTIAL | tenant-scoped receipt numbers and immutable order snapshots; 80mm/PDF adapter remains |
+
 ## Phase 2 evidence update — 2026-09-24
 
 Phase 2 implementation and executed checks are recorded in [PHASE_2_REPORT.md](PHASE_2_REPORT.md).

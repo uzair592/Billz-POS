@@ -148,6 +148,12 @@ model Organization {
   devices               OrganizationDevice[]
   approvalChallenges    ApprovalChallenge[]
   billingInvoices       BillingInvoice[]
+  categories            ProductCategory[]
+  products              Product[]
+  orders                PosOrder[]
+  registers             RegisterSession[]
+  orderPayments         PosOrderPayment[]
+  receipts              PosReceipt[]
 
   @@map("organizations")
 }
@@ -270,6 +276,9 @@ model Branch {
   memberships    BranchMembership[]
   settings       BranchSetting?
   auditLogs      AuditLog[]
+  productPrices  ProductPrice[]
+  orders         PosOrder[]
+  registers      RegisterSession[]
 
   @@unique([organizationId, code])
   @@unique([id, organizationId])
@@ -514,6 +523,148 @@ model PaymentMethod {
 
   @@unique([organizationId, key])
   @@map("payment_methods")
+}
+
+model ProductCategory {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  name String @db.VarChar(120)
+  sortOrder Int @default(0) @map("sort_order")
+  isActive Boolean @default(true) @map("is_active")
+  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Cascade)
+  products Product[]
+  @@unique([organizationId, name])
+  @@map("product_categories")
+}
+
+model Product {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  categoryId String? @map("category_id") @db.Uuid
+  name String @db.VarChar(180)
+  sku String? @db.VarChar(80)
+  barcode String? @db.VarChar(120)
+  taxRateBps Int @default(0) @map("tax_rate_bps")
+  isActive Boolean @default(true) @map("is_active")
+  isCombo Boolean @default(false) @map("is_combo")
+  comboItems Json @default("[]") @map("combo_items")
+  modifierConfig Json @default("[]") @map("modifier_config")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Cascade)
+  category ProductCategory? @relation(fields:[categoryId], references:[id], onDelete: SetNull)
+  variants ProductVariant[]
+  prices ProductPrice[]
+  orderItems PosOrderItem[]
+  @@unique([organizationId, sku])
+  @@unique([organizationId, barcode])
+  @@map("products")
+}
+
+model ProductVariant {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  productId String @map("product_id") @db.Uuid
+  name String @db.VarChar(120)
+  priceMinor Int @map("price_minor")
+  isActive Boolean @default(true) @map("is_active")
+  product Product @relation(fields:[productId], references:[id], onDelete: Cascade)
+  orderItems PosOrderItem[]
+  @@unique([productId, name])
+  @@map("product_variants")
+}
+
+model ProductPrice {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  branchId String @map("branch_id") @db.Uuid
+  productId String @map("product_id") @db.Uuid
+  priceMinor Int @map("price_minor")
+  product Product @relation(fields:[productId], references:[id], onDelete: Cascade)
+  branch Branch @relation(fields:[branchId, organizationId], references:[id, organizationId], onDelete: Cascade)
+  @@unique([branchId, productId])
+  @@map("product_prices")
+}
+
+model RegisterSession {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  branchId String @map("branch_id") @db.Uuid
+  openedById String @map("opened_by_id") @db.Uuid
+  openingFloatMinor Int @map("opening_float_minor")
+  openedAt DateTime @default(now()) @map("opened_at") @db.Timestamptz(3)
+  closedAt DateTime? @map("closed_at") @db.Timestamptz(3)
+  branch Branch @relation(fields:[branchId, organizationId], references:[id, organizationId], onDelete: Restrict)
+  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Restrict)
+  orders PosOrder[]
+  @@index([organizationId, branchId, closedAt])
+  @@map("register_sessions")
+}
+
+model PosOrder {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  branchId String @map("branch_id") @db.Uuid
+  registerId String? @map("register_id") @db.Uuid
+  createdById String @map("created_by_id") @db.Uuid
+  orderNumber Int @map("order_number")
+  orderType String @default("TAKEAWAY") @map("order_type") @db.VarChar(30)
+  status String @default("PAID") @db.VarChar(30)
+  subtotalMinor Int @map("subtotal_minor")
+  taxMinor Int @map("tax_minor")
+  totalMinor Int @map("total_minor")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  branch Branch @relation(fields:[branchId, organizationId], references:[id, organizationId], onDelete: Restrict)
+  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Restrict)
+  register RegisterSession? @relation(fields:[registerId], references:[id], onDelete: SetNull)
+  items PosOrderItem[]
+  payments PosOrderPayment[]
+  receipt PosReceipt?
+  @@unique([organizationId, orderNumber])
+  @@map("pos_orders")
+}
+
+model PosOrderItem {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  orderId String @map("order_id") @db.Uuid
+  productId String @map("product_id") @db.Uuid
+  variantId String? @map("variant_id") @db.Uuid
+  nameSnapshot String @map("name_snapshot") @db.VarChar(180)
+  quantity Int
+  unitPriceMinor Int @map("unit_price_minor")
+  taxMinor Int @map("tax_minor")
+  lineTotalMinor Int @map("line_total_minor")
+  modifiers Json @default("[]")
+  order PosOrder @relation(fields:[orderId], references:[id], onDelete: Cascade)
+  product Product @relation(fields:[productId], references:[id], onDelete: Restrict)
+  variant ProductVariant? @relation(fields:[variantId], references:[id], onDelete: SetNull)
+  @@map("pos_order_items")
+}
+
+model PosOrderPayment {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  orderId String @map("order_id") @db.Uuid
+  method String @db.VarChar(40)
+  amountMinor Int @map("amount_minor")
+  reference String? @db.VarChar(160)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  order PosOrder @relation(fields:[orderId], references:[id], onDelete: Cascade)
+  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Restrict)
+  @@map("pos_order_payments")
+}
+
+model PosReceipt {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @map("organization_id") @db.Uuid
+  orderId String @unique @map("order_id") @db.Uuid
+  receiptNumber String @map("receipt_number") @db.VarChar(50)
+  issuedAt DateTime @default(now()) @map("issued_at") @db.Timestamptz(3)
+  order PosOrder @relation(fields:[orderId], references:[id], onDelete: Restrict)
+  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Restrict)
+  @@unique([organizationId, receiptNumber])
+  @@map("pos_receipts")
 }
 
 model FileAsset {

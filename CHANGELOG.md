@@ -1,5 +1,10 @@
 # Changelog
 
+## Phase 3 POS catalog and cashier foundation
+- Add tenant-scoped product categories, products, branch prices, variants, combo/modifier metadata, tax basis points, registers, orders, payments and immutable receipt snapshots.
+- Add server-authoritative quick-sale totals with exact payment reconciliation and a responsive mobile-friendly Point of Sale workspace.
+- Add Phase 3 implementation and evidence documentation.
+
 ## Phase 2 device leases and IAM
 - Add transactional tenant-wide device leases with heartbeat, expiry, logout release, revocation enforcement and owner recovery.
 - Add downgrade conflict preview, custom role scope/approval thresholds, protected owner assignment, and one-time audited approval challenges.
