@@ -226,25 +226,54 @@ export class PosController {
     @Res() response: Response,
   ) {
     const order: any = await this.service.receipt(u, id);
-    const lines = order.items
-      .map((i: any) => `${i.nameSnapshot} x${i.quantity}  ${i.lineTotalMinor}`)
-      .join("\n");
+    const text = this.receiptText(order);
     if (format === "pdf") {
-      response
-        .type("application/pdf")
-        .send(
-          this.pdf(
-            `Receipt ${order.receipt.receiptNumber}`,
-            `${lines}\nTOTAL ${order.totalMinor}`,
-          ),
-        );
+      response.type("application/pdf").send(this.pdf(text));
       return;
     }
     response
       .type("html")
       .send(
-        `<html><head><style>@page{size:80mm auto;margin:2mm}body{width:72mm;font:12px monospace;white-space:pre-wrap}</style></head><body>${this.escape(`Receipt ${order.receipt.receiptNumber}\n${lines}\n\nSubtotal ${order.subtotalMinor}\nTax ${order.taxMinor}\nTOTAL ${order.totalMinor}\nTender ${order.paidMinor}\nChange ${order.changeMinor}`)}</body></html>`,
+        `<html><head><meta charset="utf-8"><title>Receipt ${this.escape(String(order.receipt.receiptNumber))}</title><style>@page{size:80mm auto;margin:2mm}body{width:72mm;font:12px monospace;white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body>${this.escape(text)}</body></html>`,
       );
+  }
+  private receiptText(order: any) {
+    const money = (minor: number) =>
+      `PKR ${(minor / 100).toFixed(2)} (${minor})`;
+    const itemLines = order.items.flatMap((item: any) => {
+      const modifiers = Array.isArray(item.modifiers) ? item.modifiers : [];
+      const modifierLine = modifiers.length
+        ? [
+            `  Modifiers: ${modifiers.map((m: any) => `${m.name} +${money(m.priceMinor)}`).join(", ")}`,
+          ]
+        : [];
+      return [
+        `${item.nameSnapshot} x${item.quantity}  ${money(item.lineTotalMinor)}`,
+        ...modifierLine,
+      ];
+    });
+    const tenders = order.payments.map(
+      (payment: any) =>
+        `Tender ${payment.method}: ${money(payment.amountMinor)}`,
+    );
+    return [
+      order.organization?.legalName || order.organization?.name || "Business",
+      order.branch ? `${order.branch.name} (${order.branch.code})` : "",
+      order.organization?.phone || order.organization?.email || "",
+      `Order #${order.orderNumber}  ${new Date(order.createdAt).toISOString()}`,
+      `Receipt ${order.receipt.receiptNumber}`,
+      "",
+      ...itemLines,
+      "",
+      `Subtotal: ${money(order.subtotalMinor)}`,
+      `Tax (${order.taxMode}): ${money(order.taxMinor)}`,
+      `Total: ${money(order.totalMinor)}`,
+      ...tenders,
+      `Tender total: ${money(order.paidMinor)}`,
+      `Change: ${money(order.changeMinor)}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
   private escape(value: string) {
     return value.replace(
@@ -252,8 +281,8 @@ export class PosController {
       (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] as string,
     );
   }
-  private pdf(title: string, body: string) {
-    const text = `${title}\n${body}`.replace(/[()\\]/g, "\\$&");
+  private pdf(body: string) {
+    const text = body.replace(/[()\\]/g, "\\$&");
     const stream = `BT /F1 10 Tf 40 760 Td (${text.replace(/\n/g, ") Tj 0 -14 Td (")}) Tj ET`;
     const objects = [
       `<< /Type /Catalog /Pages 2 0 R >>`,

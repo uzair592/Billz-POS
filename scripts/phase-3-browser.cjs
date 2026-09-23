@@ -24,6 +24,13 @@ async function apiCall(path, body, csrf, platform = false) {
 }
 
 async function main() {
+  for (let attempt = 0; attempt < 80; attempt++) {
+    try {
+      const health = await fetch(`${apiBase}/health`);
+      if (health.ok) break;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
   const suffix = crypto.randomUUID().slice(0, 8);
   const admin = await apiCall(
     "/platform/auth/login",
@@ -133,6 +140,10 @@ async function main() {
     await page.goto(`${base}/api/v1/pos/orders/${orderId}/receipt`);
     await page.getByText("Playwright Latte").waitFor();
     const desktopText = await page.locator("body").innerText();
+    expect(desktopText).toContain("Oat milk");
+    expect(desktopText).toContain("PKR 1.00");
+    expect(desktopText).toContain("Tender CASH");
+    expect(desktopText).toContain("Total:");
     if (
       /Loading branches…|Loading branches\.\.\.|Application error|Unhandled/i.test(
         desktopText,
@@ -151,6 +162,14 @@ async function main() {
       await page.setViewportSize(viewport);
       await page.goto(`${base}/workspace/pos`);
       await page.getByRole("heading", { name: "Point of sale" }).waitFor();
+      const branch = page.locator("select").first();
+      await expect(branch.locator("option")).toHaveCount(2);
+      await branch.selectOption({ index: 1 });
+      await page.getByText("Playwright Latte").waitFor();
+      await page.getByRole("button", { name: /Playwright Latte/ }).click();
+      await expect(
+        page.getByRole("button", { name: /Complete sale|Retry checkout/ }),
+      ).toBeVisible();
       const text = await page.locator("body").innerText();
       if (
         !text.trim() ||

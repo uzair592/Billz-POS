@@ -19,9 +19,9 @@ Additional command evidence: `corepack pnpm prisma migrate deploy` passed with 1
 
 Fresh isolated migration result: all 14 migrations, including `20260924000300_phase_3_integrity_checkout`, `20260924000400_phase_3_register_close`, and `20260924000500_phase_3_tax_override_permission`, applied successfully. The API suite is direct HTTP/database coverage; browser coverage is separately listed below.
 
-The Playwright browser flow (`scripts/phase-3-browser.cjs`) provisions only its fixture through the platform API, then uses visible login, category, product, branch, register, variant/modifier, payment, checkout, and receipt controls. It passed on desktop and mobile, verified persisted category/product/sale/receipt data, and rejected loading/error text before screenshots. The prior hand-built CDP smoke script is no longer acceptance evidence.
+The Playwright browser flow (`scripts/phase-3-browser.cjs`) provisions only its fixture through the platform API, then uses visible login, category, product, branch, register, variant/modifier, payment, checkout, and receipt controls. Desktop coverage performs the complete checkout and receipt reprint; mobile coverage adds an item and reaches the checkout controls, with loading/error assertions before screenshots. Persisted category/product/sale/receipt data was verified. The prior hand-built CDP smoke script is no longer acceptance evidence.
 
-Browser walkthrough evidence: `scripts/phase-3-browser.cjs` passed; screenshots are stored under `docs/phase-3/screenshots/playwright-*.png`.
+Browser walkthrough evidence: `scripts/phase-3-browser.cjs` passed; screenshots are stored under `docs/phase-3/screenshots/playwright-*.png`. The repository default branch is `feature/phase-0-specification`; review should target that branch, not `main`.
 
 PAY-01, TAX-01, and the Phase 3 browser gate pass: split-tender invariants, retained-sale refund accounting, register-close concurrency, historical/API receipts, and the Playwright visible-form sale/reprint flow. Physical printer delivery is **UNVERIFIED** because no printer hardware was available.
 
