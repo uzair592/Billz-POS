@@ -15,6 +15,7 @@ type Actor = {
   userId: string;
   branchIds: string[];
   isOwner?: boolean;
+  permissions?: string[];
 };
 type Meta = { ipAddress?: string; userAgent?: string };
 const MAX_MINOR = 2_000_000_000;
@@ -70,6 +71,25 @@ export class PosService {
         );
     }
     return branch;
+  }
+
+  private async lockOpenRegister(
+    tx: any,
+    actor: Actor,
+    registerId: string,
+    branchId: string,
+  ) {
+    await tx.$queryRaw(
+      Prisma.sql`SELECT id FROM register_sessions WHERE id = CAST(${registerId} AS uuid) AND organization_id = CAST(${actor.organizationId} AS uuid) AND branch_id = CAST(${branchId} AS uuid) FOR UPDATE`,
+    );
+    return tx.registerSession.findFirst({
+      where: {
+        id: registerId,
+        organizationId: actor.organizationId,
+        branchId,
+        closedAt: null,
+      },
+    });
   }
 
   async catalog(
@@ -272,11 +292,18 @@ export class PosService {
   ) {
     safeMinor(closingTotalMinor, "Closing total");
     return this.prisma.withTenant(actor.organizationId, async (tx) => {
-      const register = await tx.registerSession.findFirst({
-        where: { id, organizationId: actor.organizationId, closedAt: null },
+      const existing = await tx.registerSession.findFirst({
+        where: { id, organizationId: actor.organizationId },
       });
+      if (!existing) throw new NotFoundException("Register not found.");
+      await this.branch(tx, actor, existing.branchId);
+      const register = await this.lockOpenRegister(
+        tx,
+        actor,
+        id,
+        existing.branchId,
+      );
       if (!register) throw new NotFoundException("Open register not found.");
-      await this.branch(tx, actor, register.branchId);
       const closed = await tx.registerSession.update({
         where: { id: register.id },
         data: { closedAt: new Date(), closingTotalMinor },
@@ -307,9 +334,22 @@ export class PosService {
       select: { taxConfig: true },
     });
     const config = (settings?.taxConfig ?? {}) as any;
-    const taxMode = input.taxMode ?? config.mode ?? "EXCLUSIVE";
+    const configuredTaxMode = config.mode ?? "EXCLUSIVE";
+    const taxMode = input.taxMode ?? configuredTaxMode;
     if (!["INCLUSIVE", "EXCLUSIVE"].includes(taxMode))
       throw new BadRequestException("Tax mode must be INCLUSIVE or EXCLUSIVE.");
+    if (
+      taxMode !== configuredTaxMode &&
+      !actor.isOwner &&
+      !actor.permissions?.includes("pos.tax.override")
+    )
+      throw new ForbiddenException(
+        "Your role cannot override the configured tax mode.",
+      );
+    if (taxMode !== configuredTaxMode && !input.taxOverrideReason)
+      throw new BadRequestException(
+        "A reason is required for a tax mode override.",
+      );
     const products = await tx.product.findMany({
       where: {
         organizationId: actor.organizationId,
@@ -484,14 +524,12 @@ export class PosService {
       if (prior) return prior;
       const quote = await this.quote(tx, actor, input);
       const register = input.registerId
-        ? await tx.registerSession.findFirst({
-            where: {
-              id: input.registerId,
-              organizationId: actor.organizationId,
-              branchId: input.branchId,
-              closedAt: null,
-            },
-          })
+        ? await this.lockOpenRegister(
+            tx,
+            actor,
+            input.registerId,
+            input.branchId,
+          )
         : null;
       if (!input.hold && !register)
         throw new BadRequestException(
@@ -582,6 +620,9 @@ export class PosService {
           afterValue: {
             totalMinor: quote.totalMinor,
             orderNumber: order.orderNumber,
+            ...(input.taxOverrideReason
+              ? { taxOverrideReason: input.taxOverrideReason }
+              : {}),
           },
           ...meta,
         },
@@ -626,19 +667,18 @@ export class PosService {
       });
       if (!held) throw new NotFoundException("Held order not found.");
       await this.branch(tx, actor, held.branchId);
-      const register = await tx.registerSession.findFirst({
-        where: {
-          id: input.registerId,
-          organizationId: actor.organizationId,
-          branchId: held.branchId,
-          closedAt: null,
-        },
-      });
+      const register = await this.lockOpenRegister(
+        tx,
+        actor,
+        input.registerId,
+        held.branchId,
+      );
       if (!register)
         throw new BadRequestException(
           "Select an open register before resuming.",
         );
       let paid = 0;
+      let hasCash = false;
       const payments = input.payments ?? [];
       for (const p of payments) {
         const amount = safeMinor(p.amountMinor, "Tender amount");
@@ -657,10 +697,17 @@ export class PosService {
           throw new BadRequestException(
             `Payment method ${p.method} is not active.`,
           );
+        if (p.method === "CASH") hasCash = true;
+        if (p.verifiedExternal)
+          throw new BadRequestException(
+            "Manual tenders cannot claim external verification.",
+          );
         paid += amount;
       }
       if (paid < held.totalMinor)
         throw new BadRequestException("Tender total is below the order total.");
+      if (paid > held.totalMinor && !hasCash)
+        throw new BadRequestException("Only cash tender may include change.");
       const updated = await tx.posOrder.update({
         where: { id: held.id },
         data: {
@@ -804,7 +851,11 @@ export class PosService {
     key: string,
     meta: Meta,
   ) {
-    const hash = sha256(JSON.stringify(input));
+    if (!key || key.length < 8 || key.length > 160)
+      throw new BadRequestException(
+        "A valid Idempotency-Key header is required.",
+      );
+    const hash = sha256(JSON.stringify({ orderId: id, ...input }));
     return this.prisma.withTenant(actor.organizationId, async (tx) => {
       const prior = await this.idempotent(
         tx,
@@ -814,6 +865,9 @@ export class PosService {
         hash,
       );
       if (prior) return prior;
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM pos_orders WHERE id = CAST(${id} AS uuid) AND organization_id = CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
+      );
       const order = await tx.posOrder.findFirst({
         where: { id, organizationId: actor.organizationId },
         include: { refunds: true },
@@ -822,9 +876,10 @@ export class PosService {
       await this.branch(tx, actor, order.branchId);
       const amount = safeMinor(input.amountMinor, "Refund amount");
       const refunded = order.refunds.reduce((n, r) => n + r.amountMinor, 0);
-      if (amount <= 0 || refunded + amount > order.paidMinor)
+      const refundableBalance = order.totalMinor - refunded;
+      if (amount <= 0 || amount > refundableBalance)
         throw new BadRequestException(
-          "Refund exceeds the original paid amount.",
+          `Refund exceeds the refundable balance of ${Math.max(0, refundableBalance)} minor units.`,
         );
       const refund = await tx.posRefund.create({
         data: {
@@ -841,7 +896,7 @@ export class PosService {
         data: {
           refundedMinor: refunded + amount,
           status:
-            refunded + amount === order.paidMinor
+            refunded + amount === order.totalMinor
               ? "REFUNDED"
               : "PARTIALLY_REFUNDED",
         },

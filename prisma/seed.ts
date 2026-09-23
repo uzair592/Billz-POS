@@ -29,6 +29,7 @@ const permissions = [
   ["pos.sale.void", "Void POS sales", "pos"],
   ["pos.sale.history", "View POS history", "pos"],
   ["pos.sale.reprint", "Reprint POS receipts", "pos"],
+  ["pos.tax.override", "Override configured tax mode", "pos"],
 ] as const;
 
 const modules = [

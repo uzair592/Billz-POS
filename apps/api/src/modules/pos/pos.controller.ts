@@ -80,6 +80,7 @@ const orderSchema = z.object({
   registerId: z.string().uuid().optional(),
   orderType: z.string().max(30).optional(),
   taxMode: z.enum(["INCLUSIVE", "EXCLUSIVE"]).optional(),
+  taxOverrideReason: z.string().trim().min(3).max(500).optional(),
   hold: z.boolean().optional(),
   items: z.array(itemSchema).min(1),
   payments: z.array(paymentSchema).default([]),
