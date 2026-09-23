@@ -1,5 +1,4 @@
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+const API_URL = "/api/v1";
 
 export class ApiError extends Error {
   constructor(
@@ -38,6 +37,13 @@ export async function api<T>(
     },
   });
   const payload = await response.json().catch(() => ({}));
+  if (
+    !response.ok &&
+    payload.code === "BILLING_RESTRICTED" &&
+    typeof window !== "undefined" &&
+    window.location.pathname !== "/workspace/billing"
+  )
+    window.location.assign("/workspace/billing");
   if (!response.ok)
     throw new ApiError(
       errorMessage(payload),

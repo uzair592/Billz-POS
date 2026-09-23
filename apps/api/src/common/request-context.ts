@@ -1,7 +1,7 @@
-import type { Request } from 'express';
+import type { Request } from "express";
 
 export interface UserPrincipal {
-  kind: 'user';
+  kind: "user";
   sessionId: string;
   userId: string;
   organizationId: string;
@@ -9,13 +9,19 @@ export interface UserPrincipal {
   mustChangePassword: boolean;
   permissions: string[];
   branchIds: string[];
+  isOwner?: boolean;
+  restricted?: boolean;
+  restrictionReason?: string;
 }
 
 export interface PlatformPrincipal {
-  kind: 'platform';
+  kind: "platform";
   sessionId: string;
   platformAdminId: string;
   name: string;
 }
 
-export type AuthenticatedRequest = Request & { principal?: UserPrincipal; platformPrincipal?: PlatformPrincipal };
+export type AuthenticatedRequest = Request & {
+  principal?: UserPrincipal;
+  platformPrincipal?: PlatformPrincipal;
+};

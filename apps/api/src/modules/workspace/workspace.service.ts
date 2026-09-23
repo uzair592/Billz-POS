@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -91,6 +92,14 @@ export class WorkspaceService {
         });
         await tx.branchSetting.create({
           data: { organizationId: actor.organizationId, branchId: branch.id },
+        });
+        await tx.branchMembership.create({
+          data: {
+            organizationId: actor.organizationId,
+            branchId: branch.id,
+            userId: actor.userId,
+            isDefault: input.isPrimary,
+          },
         });
         await this.audit.create(
           {
@@ -258,17 +267,10 @@ export class WorkspaceService {
   }
 
   async createUser(actor: Actor, input: any, metadata: Metadata) {
-    const duplicateLogin = await this.prisma.user.findFirst({
-      where: {
-        OR: [
-          { username: { equals: input.username, mode: "insensitive" } },
-          ...(input.email
-            ? [{ email: { equals: input.email, mode: "insensitive" as const } }]
-            : []),
-        ],
-      },
-      select: { id: true },
-    });
+    await this.requireOwner(actor);
+    const duplicateLogin =
+      (await this.prisma.identity(input.username)) ||
+      (input.email ? await this.prisma.identity(input.email) : null);
     if (duplicateLogin)
       throw new ConflictException({
         code: "USER_EXISTS",
@@ -328,6 +330,7 @@ export class WorkspaceService {
             name: input.name,
             phone: input.phone,
             passwordHash,
+            temporaryPasswordExpiresAt: new Date(Date.now() + 48 * 3600000),
           },
         });
         await tx.userRole.createMany({
@@ -401,6 +404,18 @@ export class WorkspaceService {
     return this.prisma.permission.findMany({
       orderBy: [{ moduleKey: "asc" }, { key: "asc" }],
     });
+  }
+
+  private async requireOwner(actor: Actor) {
+    const owner = await this.prisma.withTenant(actor.organizationId, (tx) =>
+      tx.userRole.findFirst({
+        where: { userId: actor.userId, role: { key: "owner" } },
+      }),
+    );
+    if (!owner)
+      throw new ForbiddenException(
+        "Only the business owner can change staff access in this phase.",
+      );
   }
 
   devices(actor: Actor) {
@@ -507,6 +522,7 @@ export class WorkspaceService {
     permissionIds: string[],
     metadata: Metadata,
   ) {
+    await this.requireOwner(actor);
     return this.prisma.withTenant(actor.organizationId, async (tx) => {
       const role = await tx.role.findFirst({
         where: { id: roleId, organizationId: actor.organizationId },
@@ -516,6 +532,8 @@ export class WorkspaceService {
           code: "NOT_FOUND",
           message: "Role not found.",
         });
+      if (role.key === "owner")
+        throw new ForbiddenException("Owner permissions cannot be edited.");
       const permissions = await tx.permission.findMany({
         where: { id: { in: permissionIds } },
       });

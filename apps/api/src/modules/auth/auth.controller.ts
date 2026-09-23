@@ -76,7 +76,7 @@ export class AuthController {
     @CurrentUser() user: UserPrincipal,
     @Res({ passthrough: true }) response: Response,
   ) {
-    await this.auth.logout(user.sessionId);
+    await this.auth.logout(user.sessionId, user.organizationId);
     clearSessionCookie(
       response,
       this.config.get("SESSION_COOKIE_NAME", "cafe_pos_session"),
