@@ -21,6 +21,14 @@ const permissions = [
   ["purchases.manage", "Manage purchases", "purchases"],
   ["expenses.manage", "Manage expenses", "expenses"],
   ["reports.view", "View reports", "reports"],
+  ["pos.catalog.view", "View POS catalog", "pos"],
+  ["pos.catalog.manage", "Manage POS catalog", "pos"],
+  ["pos.register.open", "Open and close registers", "registers"],
+  ["pos.sale.create", "Create POS sales", "pos"],
+  ["pos.sale.refund", "Refund POS sales", "pos"],
+  ["pos.sale.void", "Void POS sales", "pos"],
+  ["pos.sale.history", "View POS history", "pos"],
+  ["pos.sale.reprint", "Reprint POS receipts", "pos"],
 ] as const;
 
 const modules = [
