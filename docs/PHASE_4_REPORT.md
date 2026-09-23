@@ -26,3 +26,13 @@ Every command checks organization and assigned branch, permissions are explicit,
 ## Open gates
 
 The three-client Playwright walkthrough (waiter → kitchen → cashier), dedicated database-backed Phase 4 concurrency tests, and UI screens for the new workflow remain open. Physical kitchen display/printer hardware is unverified. Phase 4 is therefore not complete and Phase 4 backlog items after this vertical slice have not been started.
+
+## Latest repair verification
+
+- `corepack pnpm prisma migrate deploy` — passed; additive RLS repair migration `20260924000700_phase_4_rls_policies` applied.
+- `corepack pnpm typecheck` — passed.
+- `git diff --check` — passed.
+- `corepack pnpm --filter @cafe-pos/api exec jest --config test/jest-e2e.json --runInBand test/phase-3.e2e-spec.ts --detectOpenHandles` — did not emit a completion result in this environment; no pass is claimed.
+- `node scripts/test-phase-1.cjs` — created an isolated database and applied all 16 migrations; the Jest child did not emit a completion result before the runner ended.
+
+Commit `6b698af` shares Phase 3 tender validation and register locking with dine-in settlement, adds order-state checks, role branch-scope checks, and selector-backed waiter data loading. The waiter, kitchen, and cashier pages are still an early visible workflow and have not passed a three-session browser walkthrough.
