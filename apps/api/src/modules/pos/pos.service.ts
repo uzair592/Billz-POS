@@ -442,6 +442,7 @@ export class PosService {
         taxMinor: tax,
         lineTotalMinor: net,
         modifiers: snapshots,
+        notesSnapshot: typeof item.notes === "string" ? item.notes.trim().slice(0, 500) || null : null,
       });
     }
     const subtotalMinor = lines.reduce((n, l) => n + l.lineTotalMinor, 0);

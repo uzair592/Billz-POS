@@ -9,6 +9,7 @@ export default function ServiceSetupPage() {
   const [tables, setTables] = useState<any[]>([]);
   const [stations, setStations] = useState<any[]>([]);
   const [tableName, setTableName] = useState("");
+  const [capacity, setCapacity] = useState("2");
   const [stationName, setStationName] = useState("");
   const [error, setError] = useState("");
   const refresh = async (id: string) => {
@@ -34,7 +35,11 @@ export default function ServiceSetupPage() {
     try {
       await api("/phase4/tables", {
         method: "POST",
-        body: JSON.stringify({ branchId, name: tableName, capacity: 2 }),
+        body: JSON.stringify({
+          branchId,
+          name: tableName,
+          capacity: Number(capacity),
+        }),
       });
       setTableName("");
       await refresh(branchId);
@@ -75,12 +80,20 @@ export default function ServiceSetupPage() {
             value={tableName}
             onChange={(e) => setTableName(e.target.value)}
           />
+          <Input
+            label="Capacity"
+            type="number"
+            min="1"
+            max="100"
+            value={capacity}
+            onChange={(e) => setCapacity(e.target.value)}
+          />
           <Button disabled={!tableName} onClick={createTable}>
             Create table
           </Button>
           {tables.map((t) => (
             <p key={t.id}>
-              {t.name} · {t.status}
+              {t.name} · seats {t.capacity} · {t.status}
             </p>
           ))}
         </Card>

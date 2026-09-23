@@ -10,6 +10,7 @@ export default function CashierDineInPage() {
   const [orderId, setOrderId] = useState("");
   const [registerId, setRegisterId] = useState("");
   const [amount, setAmount] = useState("");
+  const [tenderMethod, setTenderMethod] = useState("CASH");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -45,7 +46,7 @@ export default function CashierDineInPage() {
         ? command.body
         : {
             registerId,
-            payments: [{ method: "CASH", amountMinor: Number(amount) }],
+            payments: [{ method: tenderMethod, amountMinor: Number(amount) }],
           };
     const frozen =
       command?.orderId === orderId
@@ -127,6 +128,21 @@ export default function CashierDineInPage() {
               if (!command) setAmount(e.target.value);
             }}
           />
+          <label>
+            Tender method
+            <select
+              value={tenderMethod}
+              onChange={(e) => {
+                if (!command) setTenderMethod(e.target.value);
+              }}
+            >
+              <option value="CASH">Cash</option>
+              <option value="MANUAL_CARD">Manual card terminal</option>
+              <option value="BANK_TRANSFER">Bank transfer</option>
+              <option value="JAZZCASH">JazzCash</option>
+              <option value="EASYPAISA">Easypaisa</option>
+            </select>
+          </label>
           <Button
             disabled={pending || !orderId || !registerId}
             onClick={settle}

@@ -100,7 +100,29 @@ export default function KitchenPage() {
               <strong>
                 Ticket {ticket.sequence} · {ticket.kind} · {ticket.status}
               </strong>
-              <pre>{JSON.stringify(ticket.items, null, 2)}</pre>
+              <ul>
+                {(Array.isArray(ticket.items) ? ticket.items : []).map(
+                  (item: any, index: number) => (
+                    <li key={`${ticket.id}-${index}`}>
+                      <strong>
+                        {item.quantity}× {item.nameSnapshot}
+                      </strong>
+                      {item.modifiers?.length ? (
+                        <span>
+                          {" "}
+                          ·{" "}
+                          {item.modifiers
+                            .map((modifier: any) => modifier.name)
+                            .join(", ")}
+                        </span>
+                      ) : null}
+                      {item.notesSnapshot ? (
+                        <p>Note: {item.notesSnapshot}</p>
+                      ) : null}
+                    </li>
+                  ),
+                )}
+              </ul>
               <Button disabled={pending} onClick={() => ready(ticket)}>
                 {pending && command?.ticket.id === ticket.id
                   ? "Saving…"

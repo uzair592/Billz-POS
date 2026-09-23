@@ -744,6 +744,7 @@ model PosOrderItem {
   taxMinor       Int             @map("tax_minor")
   lineTotalMinor Int             @map("line_total_minor")
   modifiers      Json            @default("[]")
+  notesSnapshot  String?         @map("notes_snapshot") @db.VarChar(500)
   order          PosOrder        @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product        Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)

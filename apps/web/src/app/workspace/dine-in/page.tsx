@@ -11,6 +11,11 @@ export default function DineInPage() {
   const [tableId, setTableId] = useState("");
   const [stationId, setStationId] = useState("");
   const [productId, setProductId] = useState("");
+  const [variantId, setVariantId] = useState("");
+  const [modifierIds, setModifierIds] = useState<string[]>([]);
+  const [quantity, setQuantity] = useState("1");
+  const [notes, setNotes] = useState("");
+  const [order, setOrder] = useState<any>(null);
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -41,25 +46,36 @@ export default function DineInPage() {
       })
       .catch((e) => setError(e.message));
   }, [branchId]);
+  const product = products.find((item) => item.id === productId);
   async function open() {
-    const body = command?.body ?? {
-      branchId,
-      tableId,
-      stationId,
-      items: [{ productId, quantity: 1 }],
+    const item = {
+      productId,
+      variantId: variantId || undefined,
+      quantity: Number(quantity),
+      modifiers: modifierIds.map((id) => ({ id })),
+      notes,
     };
+    const body =
+      command?.body ??
+      (order
+        ? { stationId, expectedVersion: order.version, items: [item] }
+        : { branchId, tableId, stationId, items: [item] });
     const key = command?.key ?? crypto.randomUUID();
     setCommand({ key, body });
     setPending(true);
     setError("");
     try {
-      const data = await api<any>("/phase4/dine-in/orders", {
+      const path = order
+        ? `/phase4/dine-in/orders/${order.id}/additions`
+        : "/phase4/dine-in/orders";
+      const data = await api<any>(path, {
         method: "POST",
         headers: { "Idempotency-Key": key },
         body: JSON.stringify(body),
       });
+      setOrder(data.order);
       setResult(
-        `Order ${data.order?.orderNumber ?? data.order?.id} sent to kitchen`,
+        `${order ? "Delta" : "Order"} ${data.order?.orderNumber ?? data.order?.id} sent to kitchen`,
       );
       setCommand(null);
     } catch (e: any) {
@@ -121,6 +137,8 @@ export default function DineInPage() {
               value={productId}
               onChange={(e) => {
                 setProductId(e.target.value);
+                setVariantId("");
+                setModifierIds([]);
                 setCommand(null);
               }}
             >
@@ -131,12 +149,70 @@ export default function DineInPage() {
               ))}
             </select>
           </label>
+          {product?.variants?.length ? (
+            <label>
+              Variant
+              <select
+                value={variantId}
+                onChange={(e) => {
+                  setVariantId(e.target.value);
+                  setCommand(null);
+                }}
+              >
+                <option value="">Standard</option>
+                {product.variants.map((variant: any) => (
+                  <option key={variant.id} value={variant.id}>
+                    {variant.name} · PKR {(variant.priceMinor / 100).toFixed(2)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {product?.modifierConfig
+            ?.filter((modifier: any) => modifier.active !== false)
+            .map((modifier: any) => (
+              <label key={modifier.id}>
+                <input
+                  type="checkbox"
+                  checked={modifierIds.includes(modifier.id)}
+                  onChange={(e) => {
+                    setModifierIds((ids) =>
+                      e.target.checked
+                        ? [...ids, modifier.id]
+                        : ids.filter((id) => id !== modifier.id),
+                    );
+                    setCommand(null);
+                  }}
+                />{" "}
+                {modifier.name} · PKR {(modifier.priceMinor / 100).toFixed(2)}
+              </label>
+            ))}
+          <Input
+            label="Quantity"
+            type="number"
+            min="1"
+            value={quantity}
+            onChange={(e) => {
+              setQuantity(e.target.value);
+              setCommand(null);
+            }}
+          />
+          <Input
+            label="Kitchen notes"
+            value={notes}
+            onChange={(e) => {
+              setNotes(e.target.value);
+              setCommand(null);
+            }}
+          />
           <Button disabled={pending || !tableId || !productId} onClick={open}>
             {pending
               ? "Sending…"
               : command
                 ? "Retry same order"
-                : "Send dine-in order"}
+                : order
+                  ? "Send delta ticket"
+                  : "Send dine-in order"}
           </Button>
           {!tables.length && branchId && (
             <p>Loading available tables and menu…</p>
