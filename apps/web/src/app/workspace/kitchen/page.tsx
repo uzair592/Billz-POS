@@ -1,0 +1,5 @@
+"use client";
+import { useState } from "react";
+import { Button, Card, Input } from "../../../components/ui";
+import { api } from "../../../lib/api";
+export default function KitchenPage() { const [ticketId,setTicketId]=useState(""); const [version,setVersion]=useState("1"); const [message,setMessage]=useState(""); async function ready(){ await api(`/phase4/kitchen/tickets/${ticketId}/ready`,{method:"POST",headers:{"Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({expectedVersion:Number(version)})}); setMessage("Ticket marked ready"); } return <main className="mx-auto max-w-2xl space-y-4 p-6"><h1 className="text-2xl font-semibold">Kitchen station</h1><Card><div className="grid gap-3"><Input aria-label="Ticket ID" placeholder="Ticket ID" value={ticketId} onChange={e=>setTicketId(e.target.value)}/><Input aria-label="Ticket version" value={version} onChange={e=>setVersion(e.target.value)}/><Button onClick={ready}>Mark ready</Button>{message&&<p role="status">{message}</p>}</div></Card></main>; }
