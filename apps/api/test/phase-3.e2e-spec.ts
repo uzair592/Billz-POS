@@ -224,6 +224,16 @@ run("Phase 3 POS acceptance", () => {
       .set("x-csrf-token", activeCashierCsrf)
       .send({ branchId: branchB, items: [{ productId, quantity: 1 }] })
       .expect(403);
+    await cashier
+      .post("/api/v1/pos/quote")
+      .set("x-csrf-token", activeCashierCsrf)
+      .send({
+        branchId: branchA,
+        items: [{ productId, quantity: 1 }],
+        taxMode: "INCLUSIVE",
+        taxOverrideReason: "unauthorized attempt",
+      })
+      .expect(403);
     const exclusive = await owner
       .post("/api/v1/pos/quote")
       .set("x-csrf-token", ownerCsrf)
@@ -231,6 +241,7 @@ run("Phase 3 POS acceptance", () => {
         branchId: branchA,
         items: [{ productId, quantity: 1, modifiers: [{ id: "oat" }] }],
         taxMode: "EXCLUSIVE",
+        taxOverrideReason: "Acceptance tax comparison",
       })
       .expect(201);
     expect(exclusive.body.subtotalMinor).toBe(1100);
@@ -242,6 +253,7 @@ run("Phase 3 POS acceptance", () => {
         branchId: branchA,
         items: [{ productId, quantity: 1, modifiers: [{ id: "oat" }] }],
         taxMode: "INCLUSIVE",
+        taxOverrideReason: "Acceptance tax comparison",
       })
       .expect(201);
     expect(inclusive.body.totalMinor).toBe(1100);
@@ -317,6 +329,49 @@ run("Phase 3 POS acceptance", () => {
       .get(`/api/v1/pos/orders/${receipt.id}`)
       .expect(200);
     expect(persisted.body.items[0].unitPriceMinor).not.toBe(9999);
+    const allCard = await owner
+      .post("/api/v1/pos/orders")
+      .set("x-csrf-token", ownerCsrf)
+      .set("Idempotency-Key", `all-card-${suffix}`)
+      .send({
+        branchId: branchA,
+        registerId,
+        items: [{ productId, quantity: 1 }],
+        payments: [{ method: "MANUAL_CARD", amountMinor: 10999 }],
+      })
+      .expect(201);
+    expect(allCard.body.changeMinor).toBe(0);
+    const cashOverpay = await owner
+      .post("/api/v1/pos/orders")
+      .set("x-csrf-token", ownerCsrf)
+      .set("Idempotency-Key", `cash-overpay-${suffix}`)
+      .send({
+        branchId: branchA,
+        registerId,
+        items: [{ productId, quantity: 1 }],
+        payments: [{ method: "CASH", amountMinor: 20000 }],
+      })
+      .expect(201);
+    expect(cashOverpay.body.changeMinor).toBe(9001);
+    const concurrentRefunds = await Promise.all([
+      owner
+        .post(`/api/v1/pos/orders/${cashOverpay.body.id}/refund`)
+        .set("x-csrf-token", ownerCsrf)
+        .set("Idempotency-Key", `refund-race-a-${suffix}`)
+        .send({ amountMinor: 10999, reason: "Race refund A" }),
+      owner
+        .post(`/api/v1/pos/orders/${cashOverpay.body.id}/refund`)
+        .set("x-csrf-token", ownerCsrf)
+        .set("Idempotency-Key", `refund-race-b-${suffix}`)
+        .send({ amountMinor: 10999, reason: "Race refund B" }),
+    ]);
+    expect(concurrentRefunds.map((r) => r.status).sort()).toEqual([201, 400]);
+    await owner
+      .post(`/api/v1/pos/orders/${cashOverpay.body.id}/refund`)
+      .set("x-csrf-token", ownerCsrf)
+      .set("Idempotency-Key", `refund-over-${suffix}`)
+      .send({ amountMinor: 1, reason: "Refund beyond retained sale" })
+      .expect(400);
     const refunded = await owner
       .post(`/api/v1/pos/orders/${receipt.id}/refund`)
       .set("x-csrf-token", ownerCsrf)
@@ -374,11 +429,23 @@ run("Phase 3 POS acceptance", () => {
       .set("Idempotency-Key", `void-${suffix}`)
       .send({ reason: "Customer cancelled before payment" })
       .expect(201);
-    await owner
+    const raceOrder = owner
+      .post("/api/v1/pos/orders")
+      .set("x-csrf-token", ownerCsrf)
+      .set("Idempotency-Key", `close-race-${suffix}`)
+      .send({
+        branchId: branchA,
+        registerId,
+        items: [{ productId, quantity: 1 }],
+        payments: [{ method: "CASH", amountMinor: 9999 }],
+      });
+    const raceClose = owner
       .post(`/api/v1/pos/registers/${registerId}/close`)
       .set("x-csrf-token", ownerCsrf)
-      .send({ closingTotalMinor: 5000 })
-      .expect(201);
+      .send({ closingTotalMinor: 5000 });
+    const [saleRace, closeRace] = await Promise.all([raceOrder, raceClose]);
+    expect(closeRace.status).toBe(201);
+    expect([201, 400]).toContain(saleRace.status);
   });
   it("covers expired-seat reacquisition and restricted-owner reactivation regressions", async () => {
     await db.subscriptionPlan.updateMany({
@@ -395,7 +462,10 @@ run("Phase 3 POS acceptance", () => {
       .post("/api/v1/auth/login")
       .send({ identifier: `p3a-${suffix}`, password: `${ownerPassword}New` })
       .expect(201);
-    await db.subscriptionPlan.updateMany({ where: { code: `phase3-${suffix}` }, data: { maxDevices: 3 } });
+    await db.subscriptionPlan.updateMany({
+      where: { code: `phase3-${suffix}` },
+      data: { maxDevices: 3 },
+    });
     const devices = await db.organizationDevice.findMany({
       where: { organizationId: orgId },
       orderBy: { firstSeenAt: "asc" },

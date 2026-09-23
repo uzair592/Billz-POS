@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Card, Input, Notice } from "../../../components/ui";
 import { api } from "../../../lib/api";
@@ -11,10 +11,17 @@ type Category = { id: string; name: string };
 export default function MenuPage() {
   const client = useQueryClient();
   const [name, setName] = useState("");
+  const [productName, setProductName] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [price, setPrice] = useState("");
   const [tax, setTax] = useState("0");
+  const [modifierName, setModifierName] = useState("");
+  const [modifierPrice, setModifierPrice] = useState("0");
+  const [variantName, setVariantName] = useState("");
+  const [variantPrice, setVariantPrice] = useState("");
   const [message, setMessage] = useState("");
+  const categoryInput = useRef<HTMLInputElement>(null);
+  const productInput = useRef<HTMLInputElement>(null);
   const branches = useQuery({
     queryKey: ["branches"],
     queryFn: () => api<Branch[]>("/branches"),
@@ -27,7 +34,7 @@ export default function MenuPage() {
     mutationFn: () =>
       api<Category>("/pos/categories", {
         method: "POST",
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name: categoryInput.current?.value || name }),
       }),
     onSuccess: () => {
       setName("");
@@ -41,18 +48,36 @@ export default function MenuPage() {
       api("/pos/products", {
         method: "POST",
         body: JSON.stringify({
-          name,
+          name: productInput.current?.value || productName,
           categoryId: categoryId || undefined,
           taxRateBps: Number(tax) || 0,
           prices:
             branches.data?.map((b) => ({
               branchId: b.id,
-              priceMinor: Number(price) || 0,
+              priceMinor: Math.round((Number(price) || 0) * 100),
             })) ?? [],
+          modifierConfig: modifierName
+            ? [
+                {
+                  id: modifierName.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+                  name: modifierName,
+                  priceMinor: Math.round((Number(modifierPrice) || 0) * 100),
+                  active: true,
+                },
+              ]
+            : [],
+          variants: variantName
+            ? [
+                {
+                  name: variantName,
+                  priceMinor: Math.round((Number(variantPrice) || 0) * 100),
+                },
+              ]
+            : [],
         }),
       }),
     onSuccess: () => {
-      setName("");
+      setProductName("");
       setPrice("");
       setMessage("Product created for every active branch.");
     },
@@ -83,10 +108,11 @@ export default function MenuPage() {
           <Input
             label="Category name"
             value={name}
+            ref={categoryInput}
             onChange={(e) => setName(e.target.value)}
           />
           <Button
-            disabled={!name || category.isPending}
+            disabled={category.isPending}
             onClick={() => category.mutate()}
           >
             Create category
@@ -96,8 +122,9 @@ export default function MenuPage() {
           <h2>New product</h2>
           <Input
             label="Product name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
+            value={productName}
+            ref={productInput}
+            onChange={(e) => setProductName(e.target.value)}
           />
           <label className="label">Category</label>
           <select
@@ -113,10 +140,32 @@ export default function MenuPage() {
             ))}
           </select>
           <Input
-            label="Branch price (minor units)"
+            label="Branch price (PKR)"
             value={price}
             onChange={(e) => setPrice(e.target.value)}
-            inputMode="numeric"
+            inputMode="decimal"
+          />
+          <Input
+            label="Modifier name (optional)"
+            value={modifierName}
+            onChange={(e) => setModifierName(e.target.value)}
+          />
+          <Input
+            label="Modifier price (PKR)"
+            value={modifierPrice}
+            onChange={(e) => setModifierPrice(e.target.value)}
+            inputMode="decimal"
+          />
+          <Input
+            label="Variant name (optional)"
+            value={variantName}
+            onChange={(e) => setVariantName(e.target.value)}
+          />
+          <Input
+            label="Variant price (PKR)"
+            value={variantPrice}
+            onChange={(e) => setVariantPrice(e.target.value)}
+            inputMode="decimal"
           />
           <Input
             label="Tax rate (basis points)"
@@ -125,9 +174,7 @@ export default function MenuPage() {
             inputMode="numeric"
           />
           <Button
-            disabled={
-              !name || !price || !branches.data?.length || product.isPending
-            }
+            disabled={!price || !branches.data?.length || product.isPending}
             onClick={() => product.mutate()}
           >
             Create product

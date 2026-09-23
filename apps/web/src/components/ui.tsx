@@ -3,6 +3,7 @@ import type {
   InputHTMLAttributes,
   ReactNode,
 } from "react";
+import { forwardRef } from "react";
 
 export function Button({
   className = "",
@@ -11,19 +12,18 @@ export function Button({
   return <button className={`button ${className}`} {...props} />;
 }
 
-export function Input({
-  label,
-  error,
-  ...props
-}: InputHTMLAttributes<HTMLInputElement> & { label: string; error?: string }) {
+export const Input = forwardRef<
+  HTMLInputElement,
+  InputHTMLAttributes<HTMLInputElement> & { label: string; error?: string }
+>(function Input({ label, error, ...props }, ref) {
   return (
     <label className="field">
       <span>{label}</span>
-      <input aria-invalid={Boolean(error)} {...props} />
+      <input ref={ref} aria-invalid={Boolean(error)} {...props} />
       <small>{error}</small>
     </label>
   );
-}
+});
 
 export function Card({
   children,
