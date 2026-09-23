@@ -321,6 +321,7 @@ export class WorkspaceService {
           code: "INVALID_SCOPE",
           message: "Select roles and branches from this business.",
         });
+      if (roles.some(role => role.key === 'owner')) throw new ForbiddenException('Owner role assignment requires an ownership workflow.');
       try {
         const user = await tx.user.create({
           data: {
@@ -436,7 +437,7 @@ export class WorkspaceService {
           include: { plan: true },
         }),
         tx.organizationDevice.findMany({
-          where: { organizationId: actor.organizationId, revokedAt: null },
+          where: { organizationId: actor.organizationId, revokedAt: null, leaseExpiresAt: { gt: new Date() } },
           orderBy: { lastSeenAt: "desc" },
           include: {
             sessions: {
@@ -464,6 +465,7 @@ export class WorkspaceService {
   }
 
   async revokeDevice(actor: Actor, deviceId: string, metadata: Metadata) {
+    await this.requireOwner(actor);
     return this.prisma.withTenant(actor.organizationId, async (tx) => {
       const device = await tx.organizationDevice.findFirst({
         where: {
@@ -513,6 +515,83 @@ export class WorkspaceService {
             )
           : false,
       };
+    });
+  }
+
+  async recoverDevices(actor: Actor, metadata: Metadata) {
+    await this.requireOwner(actor);
+    return this.prisma.withTenant(actor.organizationId, async tx=>{
+      const count=await tx.organizationDevice.updateMany({where:{organizationId:actor.organizationId,revokedAt:null},data:{leaseExpiresAt:new Date()}});
+      await this.audit.create({organizationId:actor.organizationId,userId:actor.userId,actorType:'USER',actorId:actor.userId,action:'device.pool_recovered',entityType:'OrganizationDevice',reason:'Owner requested device lease recovery',afterValue:{released:count.count},...metadata},tx);
+      return {success:true,released:count.count};
+    });
+  }
+
+  async createRole(actor:Actor,input:{key:string;name:string;description?:string;permissionIds:string[];scope?:unknown;approvalLimitMinor?:number},metadata:Metadata){
+    await this.requireOwner(actor);
+    return this.prisma.withTenant(actor.organizationId,async tx=>{
+      if(input.key==='owner')throw new ForbiddenException('The owner role is protected.');
+      const permissions=await tx.permission.findMany({where:{id:{in:input.permissionIds}}});
+      if(permissions.length!==new Set(input.permissionIds).size)throw new BadRequestException('Select valid permissions.');
+      const role=await tx.role.create({data:{organizationId:actor.organizationId,key:input.key,name:input.name,description:input.description,scope:input.scope??{},approvalLimitMinor:input.approvalLimitMinor,permissions:{create:input.permissionIds.map(permissionId=>({permissionId}))}}});
+      await this.audit.create({organizationId:actor.organizationId,userId:actor.userId,actorType:'USER',actorId:actor.userId,action:'role.created',entityType:'Role',entityId:role.id,afterValue:{key:role.key,permissionIds:input.permissionIds,scope:input.scope??{}} ,...metadata},tx);
+      return role;
+    });
+  }
+
+  async assignRoles(actor:Actor,userId:string,roleIds:string[],branchIds:string[],metadata:Metadata){
+    await this.requireOwner(actor);
+    return this.prisma.withTenant(actor.organizationId,async tx=>{
+      const target=await tx.user.findFirst({where:{id:userId,organizationId:actor.organizationId},include:{roles:{include:{role:true}}}});
+      if(!target)throw new NotFoundException('User not found.');
+      const roles=await tx.role.findMany({where:{organizationId:actor.organizationId,id:{in:roleIds}}});
+      if(roles.length!==new Set(roleIds).size || roles.some(role=>role.key==='owner'))throw new ForbiddenException('Owner authority cannot be delegated.');
+      const branches=await tx.branch.findMany({where:{organizationId:actor.organizationId,id:{in:branchIds},isActive:true}});
+      if(branches.length!==new Set(branchIds).size)throw new BadRequestException('Invalid branch scope.');
+      const wasOwner=target.roles.some(item=>item.role.key==='owner');
+      if(wasOwner)throw new ForbiddenException('The last owner cannot be reassigned in this workflow.');
+      await tx.userRole.deleteMany({where:{organizationId:actor.organizationId,userId}});
+      await tx.userRole.createMany({data:roles.map(role=>({organizationId:actor.organizationId,userId,roleId:role.id}))});
+      await tx.branchMembership.deleteMany({where:{organizationId:actor.organizationId,userId}});
+      await tx.branchMembership.createMany({data:branches.map((branch,index)=>({organizationId:actor.organizationId,userId,branchId:branch.id,isDefault:index===0}))});
+      await this.audit.create({organizationId:actor.organizationId,userId:actor.userId,actorType:'USER',actorId:actor.userId,action:'user.roles_changed',entityType:'User',entityId:userId,beforeValue:{roleIds:target.roles.map(item=>item.roleId)},afterValue:{roleIds,branchIds},...metadata},tx);
+      return {success:true};
+    });
+  }
+
+  async requestApproval(actor: Actor, input: { action: string; payloadHash: string; amountMinor?: number; expiresInSeconds?: number }, metadata: Metadata) {
+    const ttl = Math.min(Math.max(input.expiresInSeconds ?? 300, 30), 3600);
+    if (!/^[a-f0-9]{64}$/i.test(input.payloadHash))
+      throw new BadRequestException("payloadHash must be a SHA-256 hash.");
+    return this.prisma.withTenant(actor.organizationId, async (tx) => {
+      const challenge = await tx.approvalChallenge.create({
+        data: {
+          organizationId: actor.organizationId,
+          action: input.action,
+          payloadHash: input.payloadHash.toLowerCase(),
+          amountMinor: input.amountMinor,
+          requestedById: actor.userId,
+          expiresAt: new Date(Date.now() + ttl * 1000),
+        },
+      });
+      await this.audit.create({ organizationId: actor.organizationId, userId: actor.userId, actorType: "USER", actorId: actor.userId, action: "approval.requested", entityType: "ApprovalChallenge", entityId: challenge.id, afterValue: { action: challenge.action, amountMinor: challenge.amountMinor }, ...metadata }, tx);
+      return { id: challenge.id, action: challenge.action, expiresAt: challenge.expiresAt, status: "PENDING" };
+    });
+  }
+
+  async consumeApproval(actor: Actor, id: string, payloadHash: string, metadata: Metadata) {
+    await this.requireOwner(actor);
+    if (!/^[a-f0-9]{64}$/i.test(payloadHash)) throw new BadRequestException("payloadHash must be a SHA-256 hash.");
+    return this.prisma.withTenant(actor.organizationId, async (tx) => {
+      const now = new Date();
+      const challenge = await tx.approvalChallenge.findFirst({ where: { id, organizationId: actor.organizationId } });
+      if (!challenge) throw new NotFoundException("Approval challenge not found.");
+      if (challenge.payloadHash !== payloadHash.toLowerCase()) throw new ForbiddenException("Approval payload does not match.");
+      if (challenge.consumedAt || challenge.expiresAt <= now) throw new ConflictException("Approval challenge is no longer valid.");
+      const updated = await tx.approvalChallenge.updateMany({ where: { id, organizationId: actor.organizationId, consumedAt: null, expiresAt: { gt: now } }, data: { consumedAt: now, approvedById: actor.userId } });
+      if (updated.count !== 1) throw new ConflictException("Approval challenge was already consumed.");
+      await this.audit.create({ organizationId: actor.organizationId, userId: actor.userId, actorType: "USER", actorId: actor.userId, action: "approval.consumed", entityType: "ApprovalChallenge", entityId: id, ...metadata }, tx);
+      return { success: true, id, consumedAt: now };
     });
   }
 

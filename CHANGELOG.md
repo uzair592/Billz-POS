@@ -1,5 +1,10 @@
 # Changelog
 
+## Phase 2 device leases and IAM
+- Add transactional tenant-wide device leases with heartbeat, expiry, logout release, revocation enforcement and owner recovery.
+- Add downgrade conflict preview, custom role scope/approval thresholds, protected owner assignment, and one-time audited approval challenges.
+- Add responsive workspace heartbeat/recovery controls and Phase 2 implementation/evidence documentation.
+
 ## Phase 1 billing and entitlement foundation
 - Add versioned subscription prices, plan limits/module snapshots, invoices, manual payments, credits, receipts and private evidence attachments.
 - Add request-time subscription/grace/suspension checks, timed suspension, scheduler reconciliation, owner restricted billing and activation/recovery controls.

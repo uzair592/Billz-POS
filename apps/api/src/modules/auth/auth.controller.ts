@@ -84,6 +84,12 @@ export class AuthController {
     return { success: true };
   }
 
+  @Post("heartbeat")
+  @UseGuards(UserAuthGuard)
+  heartbeat(@CurrentUser() user: UserPrincipal, @Req() request: AuthenticatedRequest) {
+    return this.auth.heartbeat(user.sessionId,user.organizationId,requestMetadata(request));
+  }
+
   @Post("change-temporary-password")
   @UseGuards(UserAuthGuard, PermissionGuard)
   async changePassword(

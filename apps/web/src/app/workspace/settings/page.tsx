@@ -33,6 +33,7 @@ type Device = {
   lastIpAddress: string | null;
   current: boolean;
   lastUserName: string | null;
+  leaseExpiresAt?: string | null;
 };
 type Devices = { maxDevices: number; items: Device[] };
 
@@ -66,6 +67,7 @@ export default function SettingsPage() {
   );
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState("");
+  const [recovering,setRecovering]=useState(false);
 
   useEffect(() => {
     if (!organization.data) return;
@@ -153,6 +155,8 @@ export default function SettingsPage() {
       setRemoving("");
     }
   }
+
+  async function recoverDevices(){setRecovering(true);setMessage('');try{await api('/devices/recover',{method:'POST'});setMessageTone('success');setMessage('Expired leases released. Revoked installations still require a new device identity.');await queryClient.invalidateQueries({queryKey:['devices']});}catch(error){setMessageTone('error');setMessage(error instanceof Error?error.message:'Unable to recover devices.');}finally{setRecovering(false);}}
 
   return (
     <>
@@ -276,6 +280,7 @@ export default function SettingsPage() {
             {devices.data?.items.length ?? 0} /{" "}
             {devices.data?.maxDevices ?? "-"} used
           </span>
+          <Button onClick={recoverDevices} disabled={recovering}>{recovering?'Recovering...':'Recover expired seats'}</Button>
         </div>
         {devices.error && <Notice>{devices.error.message}</Notice>}
         {devices.isLoading && <p>Loading devices...</p>}

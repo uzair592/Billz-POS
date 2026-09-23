@@ -1,5 +1,15 @@
 # Requirements matrix — Phase 0
 
+## Phase 2 evidence update — 2026-09-24
+
+Phase 2 implementation and executed checks are recorded in [PHASE_2_REPORT.md](PHASE_2_REPORT.md).
+
+| Requirement group | Phase 2 status | Evidence |
+| --- | --- | --- |
+| DEV-01 | IMPLEMENTED for lease allocation/recovery | `auth.service.ts`, `auth.guards.ts`, `workspace.service.ts`, migration `20260924000100_device_leases_iam` |
+| IAM-01 | IMPLEMENTED for custom roles, owner protection and one-use approvals | `workspace.service.ts`, `workspace.controller.ts`, `ApprovalChallenge`; permission checks remain request-time |
+| DOWN-055 | IMPLEMENTED as conflict preview | `platform/billing.service.ts`, `billing.controller.ts` |
+
 ## Phase 1 evidence update — 2026-09-23
 
 The Phase 0 baseline below is retained for traceability. Phase 1 implementation files and executed gates are recorded in [PHASE_1_REPORT.md](PHASE_1_REPORT.md).

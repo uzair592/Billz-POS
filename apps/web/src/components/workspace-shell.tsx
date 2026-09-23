@@ -14,7 +14,7 @@ import {
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 
@@ -42,6 +42,11 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
       api<{ user: { isOwner: boolean; restricted: boolean } }>("/auth/session"),
     refetchInterval: 30000,
   });
+  useEffect(() => {
+    if (!session.data?.user || session.data.user.restricted) return;
+    const timer = window.setInterval(() => { void api('/auth/heartbeat', {method:'POST'}).catch(() => undefined); }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [session.data?.user]);
 
   async function logout() {
     await api("/auth/logout", { method: "POST" }).catch(() => undefined);

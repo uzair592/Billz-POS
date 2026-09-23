@@ -27,6 +27,9 @@ import { WorkspaceService } from "./workspace.service";
 const permissionIdsSchema = z.object({
   permissionIds: z.array(z.string().uuid()),
 });
+const roleSchema=z.object({key:z.string().regex(/^[a-z][a-z0-9_]{1,79}$/),name:z.string().trim().min(2).max(100),description:z.string().trim().max(500).optional(),permissionIds:z.array(z.string().uuid()),scope:z.record(z.unknown()).optional(),approvalLimitMinor:z.number().int().nonnegative().optional()});
+const assignmentSchema=z.object({roleIds:z.array(z.string().uuid()).min(1),branchIds:z.array(z.string().uuid()).min(1)});
+const approvalSchema=z.object({action:z.string().trim().min(1).max(100),payloadHash:z.string().regex(/^[a-f0-9]{64}$/i),amountMinor:z.number().int().nonnegative().optional(),expiresInSeconds:z.number().int().min(30).max(3600).optional()});
 
 @Controller()
 @UseGuards(UserAuthGuard, PermissionGuard)
@@ -100,6 +103,10 @@ export class WorkspaceController {
     return this.service.createUser(user, body, requestMetadata(request));
   }
 
+  @Put("users/:id/roles")
+  @RequirePermissions("users.manage")
+  assignRoles(@CurrentUser() user:UserPrincipal,@Param("id",ParseUUIDPipe) id:string,@Body(new ZodValidationPipe(assignmentSchema)) body:any,@Req() request:Request){return this.service.assignRoles(user,id,body.roleIds,body.branchIds,requestMetadata(request));}
+
   @Get("roles")
   @RequirePermissions("roles.manage")
   roles(@CurrentUser() user: UserPrincipal) {
@@ -111,6 +118,10 @@ export class WorkspaceController {
   permissions() {
     return this.service.permissions();
   }
+
+  @Post("roles")
+  @RequirePermissions("roles.manage")
+  createRole(@CurrentUser() user:UserPrincipal,@Body(new ZodValidationPipe(roleSchema)) body:any,@Req() request:Request){return this.service.createRole(user,body,requestMetadata(request));}
 
   @Get("devices")
   @RequirePermissions("settings.manage")
@@ -127,6 +138,18 @@ export class WorkspaceController {
   ) {
     return this.service.revokeDevice(user, id, requestMetadata(request));
   }
+
+  @Post("devices/recover")
+  @RequirePermissions("settings.manage")
+  recoverDevices(@CurrentUser() user:UserPrincipal,@Req() request:Request){return this.service.recoverDevices(user,requestMetadata(request));}
+
+  @Post("approvals")
+  @RequirePermissions("settings.manage")
+  requestApproval(@CurrentUser() user:UserPrincipal,@Body(new ZodValidationPipe(approvalSchema)) body:any,@Req() request:Request){return this.service.requestApproval(user,body,requestMetadata(request));}
+
+  @Post("approvals/:id/consume")
+  @RequirePermissions("settings.manage")
+  consumeApproval(@CurrentUser() user:UserPrincipal,@Param("id",ParseUUIDPipe) id:string,@Body(new ZodValidationPipe(z.object({payloadHash:z.string().regex(/^[a-f0-9]{64}$/i)}))) body:any,@Req() request:Request){return this.service.consumeApproval(user,id,body.payloadHash,requestMetadata(request));}
 
   @Put("roles/:id/permissions")
   @RequirePermissions("roles.manage")
