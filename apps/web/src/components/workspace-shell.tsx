@@ -28,6 +28,11 @@ const navigation = [
   { href: "/workspace/pos", label: "Point of sale", icon: ClipboardList },
   { href: "/workspace/menu", label: "Menu", icon: ClipboardList },
   { href: "/workspace/service-setup", label: "Tables & kitchen", icon: Coffee },
+  {
+    href: "/workspace/bookings",
+    label: "Reservations & delivery",
+    icon: ClipboardList,
+  },
   { href: "/workspace/dine-in", label: "Waiter service", icon: ClipboardList },
   { href: "/workspace/kitchen", label: "Kitchen display", icon: Coffee },
   {

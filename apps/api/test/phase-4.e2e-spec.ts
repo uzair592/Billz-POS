@@ -341,4 +341,59 @@ run("Phase 4 dine-in acceptance", () => {
     expect(receipt.text).toContain("Oat");
     expect(receipt.text).toContain("No sugar");
   });
+  it("prevents overlapping reservations and applies a deposit once", async () => {
+    const startsAt = new Date(Date.now() + 86_400_000).toISOString();
+    const endsAt = new Date(Date.now() + 90_000_000).toISOString();
+    const payload = {
+      branchId,
+      tableId,
+      kind: "RESERVATION",
+      customerName: "Deposit Guest",
+      partySize: 2,
+      startsAt,
+      endsAt,
+      depositMinor: 300,
+    };
+    const booking = await owner
+      .post("/api/v1/phase4/bookings")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send(payload)
+      .expect(201);
+    await owner
+      .post("/api/v1/phase4/bookings")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send(payload)
+      .expect(409);
+    const order = await db.posOrder.findFirstOrThrow({
+      where: {
+        organizationId: orgId,
+        createdById: waiterBId,
+        status: "UNPAID",
+      },
+    });
+    await owner
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/apply-deposit`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ orderId: order.id })
+      .expect(201);
+    await owner
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/apply-deposit`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ orderId: order.id })
+      .expect(409);
+    expect(
+      await db.posOrderPayment.count({
+        where: { orderId: order.id, method: "DEPOSIT" },
+      }),
+    ).toBe(1);
+    const saved = await db.serviceBooking.findUniqueOrThrow({
+      where: { id: booking.body.id },
+    });
+    expect(saved.appliedOrderId).toBe(order.id);
+    expect(saved.depositMinor).toBe(300);
+  });
 });

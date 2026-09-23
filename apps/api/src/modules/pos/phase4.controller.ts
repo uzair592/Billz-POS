@@ -51,6 +51,20 @@ const transfer = z.object({
   tableId: z.string().uuid(),
   waiterId: z.string().uuid().optional(),
 });
+const booking = branch.extend({
+  tableId: z.string().uuid().optional(),
+  kind: z.enum(["RESERVATION", "WAITLIST", "ADVANCE_TAKEAWAY", "DELIVERY"]),
+  status: z.string().max(30).optional(),
+  customerName: z.string().trim().min(1).max(150),
+  contact: z.string().max(100).optional(),
+  partySize: z.number().int().positive(),
+  startsAt: z.string().datetime(),
+  endsAt: z.string().datetime(),
+  notes: z.string().max(500).optional(),
+  details: z.record(z.unknown()).optional(),
+  depositMinor: z.number().int().nonnegative().optional(),
+});
+const applyDeposit = z.object({ orderId: z.string().uuid() });
 
 @Controller("phase4")
 @UseGuards(UserAuthGuard, PermissionGuard)
@@ -169,5 +183,36 @@ export class Phase4Controller {
     @Req() req: any,
   ) {
     return this.service.transfer(u, id, body, key, requestMetadata(req));
+  }
+  @Get("bookings") @RequirePermissions("reservations.view") bookings(
+    @CurrentUser() u: UserPrincipal,
+    @Query("branchId", new ParseUUIDPipe()) branchId: string,
+  ) {
+    return this.service.bookings(u, branchId);
+  }
+  @Post("bookings") @RequirePermissions("reservations.manage") createBooking(
+    @CurrentUser() u: UserPrincipal,
+    @Headers("idempotency-key") key: string,
+    @Body(new ZodValidationPipe(booking)) body: any,
+    @Req() req: any,
+  ) {
+    return this.service.createBooking(u, body, key, requestMetadata(req));
+  }
+  @Post("bookings/:id/apply-deposit")
+  @RequirePermissions("reservations.manage")
+  applyDeposit(
+    @CurrentUser() u: UserPrincipal,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Headers("idempotency-key") key: string,
+    @Body(new ZodValidationPipe(applyDeposit)) body: any,
+    @Req() req: any,
+  ) {
+    return this.service.applyDeposit(
+      u,
+      id,
+      body.orderId,
+      key,
+      requestMetadata(req),
+    );
   }
 }

@@ -270,6 +270,7 @@ These are traceability entries, not separate implementation claims. Each inherit
 
 - ORD-096/102: dine-in open orders, versioned delta additions, variants, modifiers, quantities, and item-note snapshots are implemented; cancellation/change tickets and split/transfer remain open.
 - RES-114: branch tables with configurable capacity and live AVAILABLE/OCCUPIED state are implemented; floors/zones, reservations, waitlist, and deposits remain open.
+- RES-115/116/117/118/119: tenant-scoped reservation, waitlist, advance-takeaway, and delivery bookings, transactional overlap exclusion, separate deposits, and apply-once order payments are implemented and database-tested; richer dispatch and cancellation-policy screens remain open.
 - KDS-120/122: station tickets, durable outbox catch-up API, readable KDS lines, ready transitions, and five-second polling fallback are implemented; product-to-station routing and the full reconnect browser gate remain open.
 - PAY-103/110 and PRINT-162/165: authoritative server totals, shared Phase 3 tender validation, idempotent settlement, receipt persistence, and visible receipt reprint link are implemented; dine-in split-bill acceptance remains open.
 

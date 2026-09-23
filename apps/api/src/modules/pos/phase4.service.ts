@@ -125,6 +125,192 @@ export class Phase4Service {
       });
     });
   }
+  async bookings(actor: Actor, branchId: string) {
+    return this.prisma.withTenant(actor.organizationId, async (tx) => {
+      await this.branch(tx, actor, branchId);
+      return tx.serviceBooking.findMany({
+        where: { organizationId: actor.organizationId, branchId },
+        include: { table: true },
+        orderBy: { startsAt: "asc" },
+      });
+    });
+  }
+  async createBooking(actor: Actor, input: any, key: string, meta: any) {
+    return this.prisma.withTenant(actor.organizationId, async (tx) => {
+      const prior = await this.idem(
+        tx,
+        actor,
+        key,
+        "phase4.booking.create",
+        input,
+      );
+      if (prior) return prior;
+      await this.branch(tx, actor, input.branchId);
+      if (input.tableId) {
+        const table = await tx.floorTable.findFirst({
+          where: {
+            id: input.tableId,
+            organizationId: actor.organizationId,
+            branchId: input.branchId,
+            isActive: true,
+          },
+        });
+        if (!table) throw new NotFoundException("Table not found.");
+      }
+      try {
+        const booking = await tx.serviceBooking.create({
+          data: {
+            organizationId: actor.organizationId,
+            branchId: input.branchId,
+            tableId: input.tableId,
+            kind: input.kind,
+            status:
+              input.status ??
+              (input.kind === "WAITLIST" ? "WAITLISTED" : "CONFIRMED"),
+            customerName: input.customerName,
+            contact: input.contact,
+            partySize: input.partySize,
+            startsAt: new Date(input.startsAt),
+            endsAt: new Date(input.endsAt),
+            notes: input.notes,
+            details: input.details ?? {},
+            depositMinor: safeAmount(input.depositMinor ?? 0),
+          },
+        });
+        await this.audit.create(
+          {
+            organizationId: actor.organizationId,
+            userId: actor.userId,
+            actorType: "USER",
+            actorId: actor.userId,
+            action: "service.booking.created",
+            entityType: "ServiceBooking",
+            entityId: booking.id,
+            branchId: input.branchId,
+            ...meta,
+          },
+          tx,
+        );
+        await tx.idempotencyKey.update({
+          where: {
+            organizationId_key_operation: {
+              organizationId: actor.organizationId,
+              key,
+              operation: "phase4.booking.create",
+            },
+          },
+          data: { responseCode: 201, responseBody: booking as any },
+        });
+        return booking;
+      } catch (error: any) {
+        if (
+          error?.code === "P2004" ||
+          error?.code === "23P01" ||
+          String(error?.message).includes("service_bookings_no_overlap")
+        )
+          throw new ConflictException(
+            "This table already has an overlapping reservation.",
+          );
+        throw error;
+      }
+    });
+  }
+  async applyDeposit(
+    actor: Actor,
+    bookingId: string,
+    orderId: string,
+    key: string,
+    meta: any,
+  ) {
+    return this.prisma.withTenant(actor.organizationId, async (tx) => {
+      const prior = await this.idem(
+        tx,
+        actor,
+        key,
+        "phase4.booking.deposit.apply",
+        { bookingId, orderId },
+      );
+      if (prior) return prior;
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM service_bookings WHERE id=CAST(${bookingId} AS uuid) AND organization_id=CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
+      );
+      const booking = await tx.serviceBooking.findFirst({
+        where: { id: bookingId, organizationId: actor.organizationId },
+      });
+      if (!booking) throw new NotFoundException("Booking not found.");
+      await this.branch(tx, actor, booking.branchId);
+      if (booking.appliedOrderId)
+        throw new ConflictException("Deposit has already been applied.");
+      if (booking.depositMinor <= 0)
+        throw new BadRequestException("Booking has no deposit to apply.");
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM pos_orders WHERE id=CAST(${orderId} AS uuid) AND organization_id=CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
+      );
+      const order = await tx.posOrder.findFirst({
+        where: {
+          id: orderId,
+          organizationId: actor.organizationId,
+          branchId: booking.branchId,
+          orderType: "DINE_IN",
+          status: { in: ["UNPAID", "OPEN"] },
+        },
+      });
+      if (!order)
+        throw new ConflictException(
+          "Deposit can only be applied to an eligible dine-in order.",
+        );
+      const amount = Math.min(booking.depositMinor, order.totalMinor);
+      await tx.posOrderPayment.create({
+        data: {
+          organizationId: actor.organizationId,
+          orderId,
+          method: "DEPOSIT",
+          amountMinor: amount,
+          reference: booking.id,
+          tenderKind: "MANUAL",
+        },
+      });
+      await tx.posOrder.update({
+        where: { id: orderId },
+        data: { paidMinor: { increment: amount }, version: { increment: 1 } },
+      });
+      const updated = await tx.serviceBooking.update({
+        where: { id: booking.id },
+        data: {
+          appliedOrderId: orderId,
+          status: "SEATED",
+          version: { increment: 1 },
+        },
+      });
+      await this.audit.create(
+        {
+          organizationId: actor.organizationId,
+          userId: actor.userId,
+          actorType: "USER",
+          actorId: actor.userId,
+          action: "service.deposit.applied",
+          entityType: "ServiceBooking",
+          entityId: booking.id,
+          branchId: booking.branchId,
+          afterValue: { orderId, amountMinor: amount },
+          ...meta,
+        },
+        tx,
+      );
+      const result = { booking: updated, appliedMinor: amount };
+      await tx.idempotencyKey.update({
+        where: {
+          organizationId_key_operation: {
+            organizationId: actor.organizationId,
+            key,
+            operation: "phase4.booking.deposit.apply",
+          },
+        },
+        data: { responseCode: 201, responseBody: result as any },
+      });
+      return result;
+    });
+  }
   private async idem(
     tx: any,
     actor: Actor,
@@ -668,7 +854,7 @@ export class Phase4Service {
       );
       const order = await tx.posOrder.findFirst({
         where: { id: orderId, organizationId: actor.organizationId },
-        include: { table: true },
+        include: { table: true, payments: true },
       });
       if (!order) throw new NotFoundException("Dine-in order not found.");
       await this.branch(tx, actor, order.branchId);
@@ -693,11 +879,16 @@ export class Phase4Service {
       const payments = input.payments ?? [];
       if (!payments.length)
         throw new BadRequestException("At least one payment is required.");
+      const previouslyPaid = order.payments.reduce(
+        (sum: number, payment: any) => sum + payment.amountMinor,
+        0,
+      );
+      const payableMinor = Math.max(0, order.totalMinor - previouslyPaid);
       const tender = await this.pos.validateTender(
         tx,
         actor,
         payments,
-        order.totalMinor,
+        payableMinor,
       );
       const updated = await tx.posOrder.update({
         where: { id: order.id },
@@ -705,7 +896,7 @@ export class Phase4Service {
           registerId: register.id,
           status: "PAID",
           serviceStatus: "CLOSED",
-          paidMinor: tender.paidMinor,
+          paidMinor: previouslyPaid + tender.paidMinor,
           changeMinor: tender.changeMinor,
           version: { increment: 1 },
           payments: {
