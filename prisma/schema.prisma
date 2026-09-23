@@ -76,17 +76,17 @@ model PlatformSession {
 }
 
 model SubscriptionPlan {
-  id            String                     @id @default(uuid()) @db.Uuid
-  code          String                     @unique @db.VarChar(50)
-  name          String                     @db.VarChar(100)
-  maxBranches   Int                        @map("max_branches")
-  maxUsers      Int                        @map("max_users")
-  maxDevices    Int                        @default(3) @map("max_devices")
-  isActive      Boolean                    @default(true) @map("is_active")
-  createdAt     DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
-  modules       PlanModule[]
-  subscriptions OrganizationSubscription[]
+  id              String                     @id @default(uuid()) @db.Uuid
+  code            String                     @unique @db.VarChar(50)
+  name            String                     @db.VarChar(100)
+  maxBranches     Int                        @map("max_branches")
+  maxUsers        Int                        @map("max_users")
+  maxDevices      Int                        @default(3) @map("max_devices")
+  isActive        Boolean                    @default(true) @map("is_active")
+  createdAt       DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  modules         PlanModule[]
+  subscriptions   OrganizationSubscription[]
   billingVersions BillingPlanVersion[]
 
   @@map("subscription_plans")
@@ -125,7 +125,7 @@ model Organization {
   phone                 String?                    @db.VarChar(50)
   logoUrl               String?                    @map("logo_url") @db.VarChar(1000)
   status                OrganizationStatus         @default(ACTIVE)
-  statusExpiresAt       DateTime?                   @map("status_expires_at") @db.Timestamptz(3)
+  statusExpiresAt       DateTime?                  @map("status_expires_at") @db.Timestamptz(3)
   onboardingStep        Int                        @default(0) @map("onboarding_step")
   onboardingCompletedAt DateTime?                  @map("onboarding_completed_at") @db.Timestamptz(3)
   createdAt             DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -155,6 +155,10 @@ model Organization {
   orderPayments         PosOrderPayment[]
   receipts              PosReceipt[]
   refunds               PosRefund[]
+  floorTables           FloorTable[]
+  kitchenStations       KitchenStation[]
+  kitchenTickets        KitchenTicket[]
+  kitchenOutbox         KitchenOutbox[]
 
   @@map("organizations")
 }
@@ -177,41 +181,43 @@ model OrganizationSubscription {
 }
 
 model BillingPlanVersion {
-  id           String   @id @default(uuid()) @db.Uuid
-  planId       String   @map("plan_id") @db.Uuid
-  name         String   @db.VarChar(100)
-  currency     String   @db.Char(3)
-  monthlyMinor Int      @map("monthly_minor")
-  maxBranches  Int      @map("max_branches")
-  maxUsers     Int      @map("max_users")
-  maxDevices   Int      @map("max_devices")
-  graceDays    Int      @map("grace_days")
-  moduleIds    String[] @default([]) @map("module_ids") @db.Uuid
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  plan         SubscriptionPlan @relation(fields:[planId],references:[id],onDelete:Restrict)
+  id           String           @id @default(uuid()) @db.Uuid
+  planId       String           @map("plan_id") @db.Uuid
+  name         String           @db.VarChar(100)
+  currency     String           @db.Char(3)
+  monthlyMinor Int              @map("monthly_minor")
+  maxBranches  Int              @map("max_branches")
+  maxUsers     Int              @map("max_users")
+  maxDevices   Int              @map("max_devices")
+  graceDays    Int              @map("grace_days")
+  moduleIds    String[]         @default([]) @map("module_ids") @db.Uuid
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  plan         SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
   invoices     BillingInvoice[]
+
   @@index([planId, createdAt])
   @@map("billing_plan_versions")
 }
 
 model BillingInvoice {
-  id             String   @id @default(uuid()) @db.Uuid
-  organizationId String   @map("organization_id") @db.Uuid
-  planVersionId  String   @map("plan_version_id") @db.Uuid
-  commandId      String   @map("command_id") @db.Uuid
-  requestHash    String   @map("request_hash") @db.Char(64)
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @map("organization_id") @db.Uuid
+  planVersionId  String              @map("plan_version_id") @db.Uuid
+  commandId      String              @map("command_id") @db.Uuid
+  requestHash    String              @map("request_hash") @db.Char(64)
   description    String
-  currency       String   @db.Char(3)
-  totalMinor     Int      @map("total_minor")
-  periodStart    DateTime @map("period_start") @db.Timestamptz(3)
-  periodEnd      DateTime @map("period_end") @db.Timestamptz(3)
-  graceEndsAt    DateTime @map("grace_ends_at") @db.Timestamptz(3)
-  anchorDay      Int      @map("anchor_day")
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  currency       String              @db.Char(3)
+  totalMinor     Int                 @map("total_minor")
+  periodStart    DateTime            @map("period_start") @db.Timestamptz(3)
+  periodEnd      DateTime            @map("period_end") @db.Timestamptz(3)
+  graceEndsAt    DateTime            @map("grace_ends_at") @db.Timestamptz(3)
+  anchorDay      Int                 @map("anchor_day")
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
   settlements    BillingSettlement[]
-  organization   Organization @relation(fields:[organizationId],references:[id],onDelete:Restrict)
-  planVersion    BillingPlanVersion @relation(fields:[planVersionId],references:[id],onDelete:Restrict)
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  planVersion    BillingPlanVersion  @relation(fields: [planVersionId], references: [id], onDelete: Restrict)
   attachments    BillingAttachment[]
+
   @@unique([organizationId, commandId])
   @@unique([id, organizationId])
   @@index([organizationId, createdAt])
@@ -219,32 +225,34 @@ model BillingInvoice {
 }
 
 model BillingSettlement {
-  id             String   @id @default(uuid()) @db.Uuid
-  organizationId String   @map("organization_id") @db.Uuid
-  invoiceId      String   @map("invoice_id") @db.Uuid
-  commandId      String   @map("command_id") @db.Uuid
-  requestHash    String   @map("request_hash") @db.Char(64)
-  kind           String   @db.VarChar(20)
-  amountMinor    Int      @map("amount_minor")
-  method         String   @db.VarChar(30)
-  reference      String   @db.VarChar(200)
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @map("organization_id") @db.Uuid
+  invoiceId      String         @map("invoice_id") @db.Uuid
+  commandId      String         @map("command_id") @db.Uuid
+  requestHash    String         @map("request_hash") @db.Char(64)
+  kind           String         @db.VarChar(20)
+  amountMinor    Int            @map("amount_minor")
+  method         String         @db.VarChar(30)
+  reference      String         @db.VarChar(200)
   reason         String
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   invoice        BillingInvoice @relation(fields: [invoiceId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
   @@unique([organizationId, commandId])
   @@index([organizationId, invoiceId])
   @@map("billing_settlements")
 }
 
 model BillingAttachment {
-  id             String   @id @default(uuid()) @db.Uuid
-  organizationId String   @map("organization_id") @db.Uuid
-  invoiceId      String   @map("invoice_id") @db.Uuid
-  name           String   @db.VarChar(150)
-  mimeType       String   @map("mime_type") @db.VarChar(40)
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @map("organization_id") @db.Uuid
+  invoiceId      String         @map("invoice_id") @db.Uuid
+  name           String         @db.VarChar(150)
+  mimeType       String         @map("mime_type") @db.VarChar(40)
   content        Bytes
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  invoice        BillingInvoice @relation(fields:[invoiceId,organizationId],references:[id,organizationId],onDelete:Restrict)
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  invoice        BillingInvoice @relation(fields: [invoiceId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
   @@index([organizationId, invoiceId])
   @@map("billing_attachments")
 }
@@ -261,25 +269,28 @@ model OrganizationModule {
 }
 
 model Branch {
-  id             String             @id @default(uuid()) @db.Uuid
-  organizationId String             @map("organization_id") @db.Uuid
-  name           String             @db.VarChar(150)
-  code           String             @db.VarChar(30)
-  address        String?
-  phone          String?            @db.VarChar(50)
-  email          String?            @db.VarChar(320)
-  timezone       String             @default("Asia/Karachi") @db.VarChar(100)
-  isPrimary      Boolean            @default(false) @map("is_primary")
-  isActive       Boolean            @default(true) @map("is_active")
-  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
-  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  memberships    BranchMembership[]
-  settings       BranchSetting?
-  auditLogs      AuditLog[]
-  productPrices  ProductPrice[]
-  orders         PosOrder[]
-  registers      RegisterSession[]
+  id              String             @id @default(uuid()) @db.Uuid
+  organizationId  String             @map("organization_id") @db.Uuid
+  name            String             @db.VarChar(150)
+  code            String             @db.VarChar(30)
+  address         String?
+  phone           String?            @db.VarChar(50)
+  email           String?            @db.VarChar(320)
+  timezone        String             @default("Asia/Karachi") @db.VarChar(100)
+  isPrimary       Boolean            @default(false) @map("is_primary")
+  isActive        Boolean            @default(true) @map("is_active")
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  memberships     BranchMembership[]
+  settings        BranchSetting?
+  auditLogs       AuditLog[]
+  productPrices   ProductPrice[]
+  orders          PosOrder[]
+  registers       RegisterSession[]
+  floorTables     FloorTable[]
+  kitchenStations KitchenStation[]
+  kitchenTickets  KitchenTicket[]
 
   @@unique([organizationId, code])
   @@unique([id, organizationId])
@@ -288,29 +299,29 @@ model Branch {
 }
 
 model User {
-  id                  String               @id @default(uuid()) @db.Uuid
-  organizationId      String               @map("organization_id") @db.Uuid
-  username            String               @db.VarChar(80)
-  email               String?              @db.VarChar(320)
-  name                String               @db.VarChar(150)
-  phone               String?              @db.VarChar(50)
-  passwordHash        String               @map("password_hash")
-  pinHash             String?              @map("pin_hash")
-  status              UserStatus           @default(ACTIVE)
-  mustChangePassword  Boolean              @default(true) @map("must_change_password")
-  temporaryPasswordExpiresAt DateTime?     @map("temporary_password_expires_at") @db.Timestamptz(3)
-  failedLoginCount    Int                  @default(0) @map("failed_login_count")
-  lockedUntil         DateTime?            @map("locked_until") @db.Timestamptz(3)
-  lastLoginAt         DateTime?            @map("last_login_at") @db.Timestamptz(3)
-  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
-  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  branchMemberships   BranchMembership[]
-  roles               UserRole[]
-  sessions            Session[]
-  loginAttempts       LoginAttempt[]
-  passwordResetTokens PasswordResetToken[]
-  auditLogs           AuditLog[]
+  id                         String               @id @default(uuid()) @db.Uuid
+  organizationId             String               @map("organization_id") @db.Uuid
+  username                   String               @db.VarChar(80)
+  email                      String?              @db.VarChar(320)
+  name                       String               @db.VarChar(150)
+  phone                      String?              @db.VarChar(50)
+  passwordHash               String               @map("password_hash")
+  pinHash                    String?              @map("pin_hash")
+  status                     UserStatus           @default(ACTIVE)
+  mustChangePassword         Boolean              @default(true) @map("must_change_password")
+  temporaryPasswordExpiresAt DateTime?            @map("temporary_password_expires_at") @db.Timestamptz(3)
+  failedLoginCount           Int                  @default(0) @map("failed_login_count")
+  lockedUntil                DateTime?            @map("locked_until") @db.Timestamptz(3)
+  lastLoginAt                DateTime?            @map("last_login_at") @db.Timestamptz(3)
+  createdAt                  DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                  DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization               Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  branchMemberships          BranchMembership[]
+  roles                      UserRole[]
+  sessions                   Session[]
+  loginAttempts              LoginAttempt[]
+  passwordResetTokens        PasswordResetToken[]
+  auditLogs                  AuditLog[]
 
   @@unique([organizationId, username])
   @@unique([organizationId, email])
@@ -333,19 +344,19 @@ model BranchMembership {
 }
 
 model Role {
-  id             String           @id @default(uuid()) @db.Uuid
-  organizationId String           @map("organization_id") @db.Uuid
-  key            String           @db.VarChar(80)
-  name           String           @db.VarChar(100)
-  description    String?
-  isSystem       Boolean          @default(false) @map("is_system")
-  scope          Json             @default("{}")
-  approvalLimitMinor Int?         @map("approval_limit_minor")
-  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  users          UserRole[]
-  permissions    RolePermission[]
+  id                 String           @id @default(uuid()) @db.Uuid
+  organizationId     String           @map("organization_id") @db.Uuid
+  key                String           @db.VarChar(80)
+  name               String           @db.VarChar(100)
+  description        String?
+  isSystem           Boolean          @default(false) @map("is_system")
+  scope              Json             @default("{}")
+  approvalLimitMinor Int?             @map("approval_limit_minor")
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization       Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  users              UserRole[]
+  permissions        RolePermission[]
 
   @@unique([organizationId, key])
   @@unique([id, organizationId])
@@ -353,18 +364,19 @@ model Role {
 }
 
 model ApprovalChallenge {
-  id             String   @id @default(uuid()) @db.Uuid
-  organizationId String   @map("organization_id") @db.Uuid
-  action         String   @db.VarChar(100)
-  payloadHash    String   @map("payload_hash") @db.Char(64)
-  amountMinor    Int?     @map("amount_minor")
-  requestedById  String   @map("requested_by_id") @db.Uuid
-  approvedById   String?  @map("approved_by_id") @db.Uuid
-  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
-  consumedAt     DateTime? @map("consumed_at") @db.Timestamptz(3)
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  organization   Organization @relation(fields:[organizationId],references:[id],onDelete:Restrict)
-  @@index([organizationId,action,expiresAt])
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  action         String       @db.VarChar(100)
+  payloadHash    String       @map("payload_hash") @db.Char(64)
+  amountMinor    Int?         @map("amount_minor")
+  requestedById  String       @map("requested_by_id") @db.Uuid
+  approvedById   String?      @map("approved_by_id") @db.Uuid
+  expiresAt      DateTime     @map("expires_at") @db.Timestamptz(3)
+  consumedAt     DateTime?    @map("consumed_at") @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, action, expiresAt])
   @@map("approval_challenges")
 }
 
@@ -527,167 +539,259 @@ model PaymentMethod {
 }
 
 model ProductCategory {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  name String @db.VarChar(120)
-  sortOrder Int @default(0) @map("sort_order")
-  isActive Boolean @default(true) @map("is_active")
-  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Cascade)
-  products Product[]
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  name           String       @db.VarChar(120)
+  sortOrder      Int          @default(0) @map("sort_order")
+  isActive       Boolean      @default(true) @map("is_active")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  products       Product[]
+
   @@unique([organizationId, name])
   @@map("product_categories")
 }
 
 model Product {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  categoryId String? @map("category_id") @db.Uuid
-  name String @db.VarChar(180)
-  sku String? @db.VarChar(80)
-  barcode String? @db.VarChar(120)
-  taxRateBps Int @default(0) @map("tax_rate_bps")
-  isActive Boolean @default(true) @map("is_active")
-  isCombo Boolean @default(false) @map("is_combo")
-  comboItems Json @default("[]") @map("combo_items")
-  modifierConfig Json @default("[]") @map("modifier_config")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
-  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Cascade)
-  category ProductCategory? @relation(fields:[categoryId], references:[id], onDelete: SetNull)
-  variants ProductVariant[]
-  prices ProductPrice[]
-  orderItems PosOrderItem[]
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  categoryId     String?          @map("category_id") @db.Uuid
+  name           String           @db.VarChar(180)
+  sku            String?          @db.VarChar(80)
+  barcode        String?          @db.VarChar(120)
+  taxRateBps     Int              @default(0) @map("tax_rate_bps")
+  isActive       Boolean          @default(true) @map("is_active")
+  isCombo        Boolean          @default(false) @map("is_combo")
+  comboItems     Json             @default("[]") @map("combo_items")
+  modifierConfig Json             @default("[]") @map("modifier_config")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category       ProductCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  variants       ProductVariant[]
+  prices         ProductPrice[]
+  orderItems     PosOrderItem[]
+
   @@unique([organizationId, sku])
   @@unique([organizationId, barcode])
   @@map("products")
 }
 
 model ProductVariant {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  productId String @map("product_id") @db.Uuid
-  name String @db.VarChar(120)
-  priceMinor Int @map("price_minor")
-  isActive Boolean @default(true) @map("is_active")
-  product Product @relation(fields:[productId], references:[id], onDelete: Cascade)
-  orderItems PosOrderItem[]
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @map("organization_id") @db.Uuid
+  productId      String         @map("product_id") @db.Uuid
+  name           String         @db.VarChar(120)
+  priceMinor     Int            @map("price_minor")
+  isActive       Boolean        @default(true) @map("is_active")
+  product        Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems     PosOrderItem[]
+
   @@unique([productId, name])
   @@map("product_variants")
 }
 
 model ProductPrice {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  branchId String @map("branch_id") @db.Uuid
-  productId String @map("product_id") @db.Uuid
-  priceMinor Int @map("price_minor")
-  product Product @relation(fields:[productId], references:[id], onDelete: Cascade)
-  branch Branch @relation(fields:[branchId, organizationId], references:[id, organizationId], onDelete: Cascade)
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @map("organization_id") @db.Uuid
+  branchId       String  @map("branch_id") @db.Uuid
+  productId      String  @map("product_id") @db.Uuid
+  priceMinor     Int     @map("price_minor")
+  product        Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  branch         Branch  @relation(fields: [branchId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
   @@unique([branchId, productId])
   @@map("product_prices")
 }
 
 model RegisterSession {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  branchId String @map("branch_id") @db.Uuid
-  openedById String @map("opened_by_id") @db.Uuid
-  openingFloatMinor Int @map("opening_float_minor")
-  openedAt DateTime @default(now()) @map("opened_at") @db.Timestamptz(3)
-  closedAt DateTime? @map("closed_at") @db.Timestamptz(3)
-  closingTotalMinor Int? @map("closing_total_minor")
-  branch Branch @relation(fields:[branchId, organizationId], references:[id, organizationId], onDelete: Restrict)
-  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Restrict)
-  orders PosOrder[]
+  id                String       @id @default(uuid()) @db.Uuid
+  organizationId    String       @map("organization_id") @db.Uuid
+  branchId          String       @map("branch_id") @db.Uuid
+  openedById        String       @map("opened_by_id") @db.Uuid
+  openingFloatMinor Int          @map("opening_float_minor")
+  openedAt          DateTime     @default(now()) @map("opened_at") @db.Timestamptz(3)
+  closedAt          DateTime?    @map("closed_at") @db.Timestamptz(3)
+  closingTotalMinor Int?         @map("closing_total_minor")
+  branch            Branch       @relation(fields: [branchId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  orders            PosOrder[]
+
   @@index([organizationId, branchId, closedAt])
   @@map("register_sessions")
 }
 
 model PosOrder {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  branchId String @map("branch_id") @db.Uuid
-  registerId String? @map("register_id") @db.Uuid
-  createdById String @map("created_by_id") @db.Uuid
-  orderNumber Int @default(autoincrement()) @map("order_number")
-  orderType String @default("TAKEAWAY") @map("order_type") @db.VarChar(30)
-  status String @default("PAID") @db.VarChar(30)
-  subtotalMinor Int @map("subtotal_minor")
-  taxMinor Int @map("tax_minor")
-  totalMinor Int @map("total_minor")
-  taxMode String @default("EXCLUSIVE") @map("tax_mode") @db.VarChar(20)
-  discountMinor Int @default(0) @map("discount_minor")
-  paidMinor Int @default(0) @map("paid_minor")
-  changeMinor Int @default(0) @map("change_minor")
-  refundedMinor Int @default(0) @map("refunded_minor")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  branch Branch @relation(fields:[branchId, organizationId], references:[id, organizationId], onDelete: Restrict)
-  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Restrict)
-  register RegisterSession? @relation(fields:[registerId], references:[id], onDelete: SetNull)
-  items PosOrderItem[]
-  payments PosOrderPayment[]
-  receipt PosReceipt?
-  refunds PosRefund[]
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @map("organization_id") @db.Uuid
+  branchId       String            @map("branch_id") @db.Uuid
+  registerId     String?           @map("register_id") @db.Uuid
+  createdById    String            @map("created_by_id") @db.Uuid
+  orderNumber    Int               @default(autoincrement()) @map("order_number")
+  orderType      String            @default("TAKEAWAY") @map("order_type") @db.VarChar(30)
+  status         String            @default("PAID") @db.VarChar(30)
+  subtotalMinor  Int               @map("subtotal_minor")
+  taxMinor       Int               @map("tax_minor")
+  totalMinor     Int               @map("total_minor")
+  taxMode        String            @default("EXCLUSIVE") @map("tax_mode") @db.VarChar(20)
+  discountMinor  Int               @default(0) @map("discount_minor")
+  paidMinor      Int               @default(0) @map("paid_minor")
+  changeMinor    Int               @default(0) @map("change_minor")
+  refundedMinor  Int               @default(0) @map("refunded_minor")
+  tableId        String?           @map("table_id") @db.Uuid
+  version        Int               @default(1)
+  serviceStatus  String            @default("DRAFT") @map("service_status") @db.VarChar(30)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  branch         Branch            @relation(fields: [branchId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  register       RegisterSession?  @relation(fields: [registerId], references: [id], onDelete: SetNull)
+  table          FloorTable?       @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  items          PosOrderItem[]
+  payments       PosOrderPayment[]
+  receipt        PosReceipt?
+  refunds        PosRefund[]
+  tickets        KitchenTicket[]
+
   @@unique([organizationId, orderNumber])
   @@map("pos_orders")
 }
 
+model FloorTable {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  branchId       String       @map("branch_id") @db.Uuid
+  name           String       @db.VarChar(80)
+  capacity       Int          @default(2)
+  status         String       @default("AVAILABLE") @db.VarChar(20)
+  isActive       Boolean      @default(true) @map("is_active")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  orders         PosOrder[]
+
+  @@unique([organizationId, branchId, name])
+  @@unique([id, organizationId, branchId])
+  @@index([organizationId, branchId, status])
+  @@map("floor_tables")
+}
+
+model KitchenStation {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @map("organization_id") @db.Uuid
+  branchId       String          @map("branch_id") @db.Uuid
+  name           String          @db.VarChar(100)
+  isActive       Boolean         @default(true) @map("is_active")
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  branch         Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  tickets        KitchenTicket[]
+
+  @@unique([organizationId, branchId, name])
+  @@unique([id, organizationId, branchId])
+  @@map("kitchen_stations")
+}
+
+model KitchenTicket {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @map("organization_id") @db.Uuid
+  branchId       String          @map("branch_id") @db.Uuid
+  orderId        String          @map("order_id") @db.Uuid
+  stationId      String          @map("station_id") @db.Uuid
+  sequence       Int
+  kind           String          @default("INITIAL") @db.VarChar(20)
+  status         String          @default("PENDING") @db.VarChar(20)
+  version        Int             @default(1)
+  items          Json
+  createdById    String          @map("created_by_id") @db.Uuid
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  readyAt        DateTime?       @map("ready_at") @db.Timestamptz(3)
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  branch         Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  order          PosOrder        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  station        KitchenStation  @relation(fields: [stationId], references: [id], onDelete: Restrict)
+  outbox         KitchenOutbox[]
+
+  @@unique([organizationId, orderId, sequence])
+  @@index([organizationId, branchId, stationId, status])
+  @@map("kitchen_tickets")
+}
+
+model KitchenOutbox {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @map("organization_id") @db.Uuid
+  branchId       String        @map("branch_id") @db.Uuid
+  ticketId       String        @map("ticket_id") @db.Uuid
+  eventType      String        @map("event_type") @db.VarChar(50)
+  payload        Json
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  deliveredAt    DateTime?     @map("delivered_at") @db.Timestamptz(3)
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  ticket         KitchenTicket @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, branchId, createdAt])
+  @@map("kitchen_outbox")
+}
+
 model PosOrderItem {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  orderId String @map("order_id") @db.Uuid
-  productId String @map("product_id") @db.Uuid
-  variantId String? @map("variant_id") @db.Uuid
-  nameSnapshot String @map("name_snapshot") @db.VarChar(180)
-  quantity Int
-  unitPriceMinor Int @map("unit_price_minor")
-  taxMinor Int @map("tax_minor")
-  lineTotalMinor Int @map("line_total_minor")
-  modifiers Json @default("[]")
-  order PosOrder @relation(fields:[orderId], references:[id], onDelete: Cascade)
-  product Product @relation(fields:[productId], references:[id], onDelete: Restrict)
-  variant ProductVariant? @relation(fields:[variantId], references:[id], onDelete: SetNull)
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @map("organization_id") @db.Uuid
+  orderId        String          @map("order_id") @db.Uuid
+  productId      String          @map("product_id") @db.Uuid
+  variantId      String?         @map("variant_id") @db.Uuid
+  nameSnapshot   String          @map("name_snapshot") @db.VarChar(180)
+  quantity       Int
+  unitPriceMinor Int             @map("unit_price_minor")
+  taxMinor       Int             @map("tax_minor")
+  lineTotalMinor Int             @map("line_total_minor")
+  modifiers      Json            @default("[]")
+  order          PosOrder        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
   @@map("pos_order_items")
 }
 
 model PosOrderPayment {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  orderId String @map("order_id") @db.Uuid
-  method String @db.VarChar(40)
-  amountMinor Int @map("amount_minor")
-  reference String? @db.VarChar(160)
-  tenderKind String @default("MANUAL") @map("tender_kind") @db.VarChar(20)
-  verifiedAt DateTime? @map("verified_at") @db.Timestamptz(3)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  order PosOrder @relation(fields:[orderId], references:[id], onDelete: Cascade)
-  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Restrict)
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  orderId        String       @map("order_id") @db.Uuid
+  method         String       @db.VarChar(40)
+  amountMinor    Int          @map("amount_minor")
+  reference      String?      @db.VarChar(160)
+  tenderKind     String       @default("MANUAL") @map("tender_kind") @db.VarChar(20)
+  verifiedAt     DateTime?    @map("verified_at") @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  order          PosOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@map("pos_order_payments")
 }
 
 model PosRefund {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  orderId String @map("order_id") @db.Uuid
-  amountMinor Int @map("amount_minor")
-  reason String @db.VarChar(500)
-  disposition String @default("NO_STOCK") @db.VarChar(30)
-  createdById String @map("created_by_id") @db.Uuid
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  organization Organization @relation(fields:[organizationId], references:[id], onDelete:Restrict)
-  order PosOrder @relation(fields:[orderId], references:[id], onDelete:Restrict)
-  @@index([organizationId,orderId])
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  orderId        String       @map("order_id") @db.Uuid
+  amountMinor    Int          @map("amount_minor")
+  reason         String       @db.VarChar(500)
+  disposition    String       @default("NO_STOCK") @db.VarChar(30)
+  createdById    String       @map("created_by_id") @db.Uuid
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  order          PosOrder     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, orderId])
   @@map("pos_refunds")
 }
 
 model PosReceipt {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @map("organization_id") @db.Uuid
-  orderId String @unique @map("order_id") @db.Uuid
-  receiptNumber String @map("receipt_number") @db.VarChar(50)
-  issuedAt DateTime @default(now()) @map("issued_at") @db.Timestamptz(3)
-  order PosOrder @relation(fields:[orderId], references:[id], onDelete: Restrict)
-  organization Organization @relation(fields:[organizationId], references:[id], onDelete: Restrict)
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  orderId        String       @unique @map("order_id") @db.Uuid
+  receiptNumber  String       @map("receipt_number") @db.VarChar(50)
+  issuedAt       DateTime     @default(now()) @map("issued_at") @db.Timestamptz(3)
+  order          PosOrder     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
   @@unique([organizationId, receiptNumber])
   @@map("pos_receipts")
 }

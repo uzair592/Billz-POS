@@ -6,6 +6,7 @@ import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { AppModule } from "../src/app.module";
 import { hashPassword } from "../src/common/security";
+const pdfParse = require("pdf-parse");
 
 const run =
   process.env.RUN_DATABASE_TESTS === "true" ? describe : describe.skip;
@@ -310,12 +311,76 @@ run("Phase 3 POS acceptance", () => {
       .get(`/api/v1/pos/orders/${first.body.id}/receipt?format=pdf`)
       .expect(200)
       .expect("Content-Type", /application\/pdf/);
-    const pdfText = pdfReceipt.body.toString("latin1");
-    expect(pdfText).toContain("Phase 3 A");
-    expect(pdfText).toContain("Phase 3 Latte");
-    expect(pdfText).toContain("Oat milk");
-    expect(pdfText).toContain("Tender CASH");
-    expect(pdfText).toContain("Tender MANUAL_CARD");
+    const parsedPdf = await pdfParse(pdfReceipt.body);
+    expect(parsedPdf.text).toContain("Phase 3 A");
+    expect(parsedPdf.text).toContain("Phase 3 Latte");
+    expect(parsedPdf.text).toContain("Oat milk");
+    expect(parsedPdf.text).toContain("Tender CASH");
+    expect(parsedPdf.text).toContain("Tender MANUAL_CARD");
+    const specialProduct = await owner
+      .post("/api/v1/pos/products")
+      .set("x-csrf-token", ownerCsrf)
+      .send({
+        name: "Café Mocha ☕",
+        modifierConfig: [
+          { id: "cocoa", name: "Cacao crème", priceMinor: 75, active: true },
+        ],
+        variants: [{ name: "Grande", priceMinor: 1300 }],
+        prices: [
+          { branchId: branchA, priceMinor: 1200 },
+          { branchId: branchB, priceMinor: 1200 },
+        ],
+      })
+      .expect(201);
+    const longItems = Array.from({ length: 45 }, () => ({
+      productId: specialProduct.body.id,
+      variantId: specialProduct.body.variants[0].id,
+      quantity: 1,
+      modifiers: [{ id: "cocoa" }],
+    }));
+    const longQuote = await owner
+      .post("/api/v1/pos/quote")
+      .set("x-csrf-token", ownerCsrf)
+      .send({ branchId: branchA, items: longItems })
+      .expect(201);
+    const longSale = await owner
+      .post("/api/v1/pos/orders")
+      .set("x-csrf-token", ownerCsrf)
+      .set("Idempotency-Key", `long-receipt-${suffix}`)
+      .send({
+        branchId: branchA,
+        registerId,
+        items: longItems,
+        payments: [
+          {
+            method: "CASH",
+            amountMinor: Math.floor(longQuote.body.totalMinor / 2),
+          },
+          {
+            method: "MANUAL_CARD",
+            amountMinor:
+              longQuote.body.totalMinor -
+              Math.floor(longQuote.body.totalMinor / 2),
+          },
+        ],
+      })
+      .expect(201);
+    const longPdf = await owner
+      .get(`/api/v1/pos/orders/${longSale.body.id}/receipt?format=pdf`)
+      .expect(200)
+      .expect("Content-Type", /application\/pdf/);
+    const extracted = await pdfParse(longPdf.body);
+    expect(extracted.text).toContain("Café Mocha");
+    expect(extracted.text).toContain("Cacao crème");
+    expect(extracted.text).toContain("Tender CASH");
+    expect(extracted.text).toContain("Tender MANUAL_CARD");
+    expect(extracted.text).toContain("Total:");
+    expect(extracted.text.split("Café Mocha").length - 1).toBe(45);
+    const longHtml = await owner
+      .get(`/api/v1/pos/orders/${longSale.body.id}/receipt`)
+      .expect(200)
+      .expect("Content-Type", /text\/html/);
+    expect(longHtml.text).toContain("Café Mocha");
     await owner
       .post("/api/v1/pos/orders")
       .set("x-csrf-token", ownerCsrf)

@@ -13,6 +13,8 @@ import {
 } from "@nestjs/common";
 import { z } from "zod";
 import type { Request, Response } from "express";
+import PDFDocument from "pdfkit";
+import { existsSync } from "node:fs";
 import { CurrentUser, RequirePermissions } from "../../common/auth.decorators";
 import { requestMetadata } from "../../common/http";
 import type { UserPrincipal } from "../../common/request-context";
@@ -228,7 +230,7 @@ export class PosController {
     const order: any = await this.service.receipt(u, id);
     const text = this.receiptText(order);
     if (format === "pdf") {
-      response.type("application/pdf").send(this.pdf(text));
+      response.type("application/pdf").send(await this.pdf(text));
       return;
     }
     response
@@ -281,29 +283,26 @@ export class PosController {
       (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] as string,
     );
   }
-  private pdf(body: string) {
-    const text = body.replace(/[()\\]/g, "\\$&");
-    const stream = `BT /F1 10 Tf 40 760 Td (${text.replace(/\n/g, ") Tj 0 -14 Td (")}) Tj ET`;
-    const objects = [
-      `<< /Type /Catalog /Pages 2 0 R >>`,
-      `<< /Type /Pages /Kids [3 0 R] /Count 1 >>`,
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 226 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>`,
-      `<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>`,
-      `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+  private pdf(body: string): Promise<Buffer> {
+    const fontCandidates = [
+      "C:/Windows/Fonts/arial.ttf",
+      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+      "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
     ];
-    let pdf = "%PDF-1.4\n";
-    const offsets: number[] = [0];
-    for (let i = 0; i < objects.length; i++) {
-      offsets.push(pdf.length);
-      pdf += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`;
-    }
-    const xref = pdf.length;
-    pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets
-      .slice(1)
-      .map((o) => `${String(o).padStart(10, "0")} 00000 n `)
-      .join(
-        "\n",
-      )}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-    return Buffer.from(pdf);
+    const font = fontCandidates.find((candidate) => existsSync(candidate));
+    const lines = body.split("\n").length;
+    const doc = new PDFDocument({
+      size: [226, Math.max(842, 48 + lines * 15)],
+      margin: 18,
+    });
+    if (font) doc.font(font);
+    doc.fontSize(9).text(body, { width: 190, lineGap: 2 });
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
+      doc.on("error", reject);
+      doc.end();
+    });
   }
 }

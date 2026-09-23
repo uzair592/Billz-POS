@@ -327,7 +327,7 @@ export class PosService {
     });
   }
 
-  private async quote(tx: any, actor: Actor, input: any) {
+  async quote(tx: any, actor: Actor, input: any) {
     await this.branch(tx, actor, input.branchId);
     const settings = await tx.businessSetting.findUnique({
       where: { organizationId: actor.organizationId },
