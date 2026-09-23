@@ -36,3 +36,5 @@ The three-client Playwright walkthrough (waiter → kitchen → cashier), dedica
 - `node scripts/test-phase-1.cjs` — created an isolated database and applied all 16 migrations; the Jest child did not emit a completion result before the runner ended.
 
 Commit `6b698af` shares Phase 3 tender validation and register locking with dine-in settlement, adds order-state checks, role branch-scope checks, and selector-backed waiter data loading. The waiter, kitchen, and cashier pages are still an early visible workflow and have not passed a three-session browser walkthrough.
+
+The latest changes also route Phase 3 create/resume checkout through the same `validateTender` helper used by dine-in settlement. Kitchen and cashier screens now load selectable records and display ticket/order state and saved totals. No three-session browser result is claimed yet.
