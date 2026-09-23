@@ -73,7 +73,7 @@ export class PosService {
     return branch;
   }
 
-  private async lockOpenRegister(
+  async lockOpenRegister(
     tx: any,
     actor: Actor,
     registerId: string,
@@ -90,6 +90,24 @@ export class PosService {
         closedAt: null,
       },
     });
+  }
+
+  async validateTender(tx: any, actor: Actor, payments: any[], totalMinor: number) {
+    let paidMinor = 0, cashMinor = 0, nonCashMinor = 0;
+    for (const payment of payments ?? []) {
+      const amount = safeMinor(payment.amountMinor, "Tender amount");
+      if (amount <= 0) throw new BadRequestException("Tender amount must be positive.");
+      const method = String(payment.method).toUpperCase();
+      const allowed = BUILTIN_TENDERS.has(method) || await tx.paymentMethod.findFirst({ where: { organizationId: actor.organizationId, key: payment.method, isActive: true } });
+      if (!allowed) throw new BadRequestException(`Payment method ${payment.method} is not active.`);
+      if (payment.verifiedExternal) throw new BadRequestException("Manual tenders cannot claim external verification.");
+      paidMinor += amount; if (method === "CASH") cashMinor += amount; else nonCashMinor += amount;
+    }
+    if (paidMinor < totalMinor) throw new BadRequestException("Tender total is below the order total.");
+    if (nonCashMinor > totalMinor) throw new BadRequestException("Non-cash tender cannot exceed the sale amount.");
+    if (paidMinor > totalMinor && cashMinor === 0) throw new BadRequestException("Only cash tender may include change.");
+    if (paidMinor > totalMinor && paidMinor - totalMinor > cashMinor) throw new BadRequestException("Change cannot exceed cash tender received.");
+    return { paidMinor, cashMinor, nonCashMinor, changeMinor: Math.max(0, paidMinor - totalMinor) };
   }
 
   async catalog(
@@ -536,53 +554,8 @@ export class PosService {
           "Select an open register before checkout.",
         );
       const payments = input.payments ?? [];
-      let paidMinor = 0;
-      let hasCash = false;
-      let cashMinor = 0;
-      let nonCashMinor = 0;
-      for (const payment of payments) {
-        const amount = safeMinor(payment.amountMinor, "Tender amount");
-        if (!Number.isInteger(amount) || amount <= 0)
-          throw new BadRequestException("Tender amount must be positive.");
-        if (payment.method === "CASH") {
-          hasCash = true;
-          cashMinor += amount;
-        } else nonCashMinor += amount;
-        const allowed =
-          BUILTIN_TENDERS.has(payment.method) ||
-          (await tx.paymentMethod.findFirst({
-            where: {
-              organizationId: actor.organizationId,
-              key: payment.method,
-              isActive: true,
-            },
-          }));
-        if (!allowed)
-          throw new BadRequestException(
-            `Payment method ${payment.method} is not active.`,
-          );
-        if (payment.verifiedExternal)
-          throw new BadRequestException(
-            "External payment confirmation must come from a verified provider callback; manual tenders cannot claim verification.",
-          );
-        paidMinor += amount;
-      }
-      if (!input.hold && paidMinor < quote.totalMinor)
-        throw new BadRequestException("Tender total is below the order total.");
-      if (!input.hold && nonCashMinor > quote.totalMinor)
-        throw new BadRequestException(
-          "Non-cash tender cannot exceed the sale amount.",
-        );
-      if (!input.hold && paidMinor > quote.totalMinor && !hasCash)
-        throw new BadRequestException("Only cash tender may include change.");
-      if (
-        !input.hold &&
-        paidMinor > quote.totalMinor &&
-        paidMinor - quote.totalMinor > cashMinor
-      )
-        throw new BadRequestException(
-          "Change cannot exceed cash tender received.",
-        );
+      const tender = input.hold ? { paidMinor: 0, changeMinor: 0 } : await this.validateTender(tx, actor, payments, quote.totalMinor);
+      const paidMinor = tender.paidMinor;
       const order = await tx.posOrder.create({
         data: {
           organizationId: actor.organizationId,
@@ -599,7 +572,7 @@ export class PosService {
           paidMinor: input.hold ? 0 : paidMinor,
           changeMinor: input.hold
             ? 0
-            : Math.max(0, paidMinor - quote.totalMinor),
+            : tender.changeMinor,
           items: { create: quote.lines },
           payments: input.hold
             ? undefined
@@ -694,57 +667,15 @@ export class PosService {
         throw new BadRequestException(
           "Select an open register before resuming.",
         );
-      let paid = 0;
-      let hasCash = false;
-      let cashMinor = 0;
-      let nonCashMinor = 0;
       const payments = input.payments ?? [];
-      for (const p of payments) {
-        const amount = safeMinor(p.amountMinor, "Tender amount");
-        if (amount <= 0)
-          throw new BadRequestException("Tender amount must be positive.");
-        if (
-          !BUILTIN_TENDERS.has(p.method) &&
-          !(await tx.paymentMethod.findFirst({
-            where: {
-              organizationId: actor.organizationId,
-              key: p.method,
-              isActive: true,
-            },
-          }))
-        )
-          throw new BadRequestException(
-            `Payment method ${p.method} is not active.`,
-          );
-        if (p.method === "CASH") {
-          hasCash = true;
-          cashMinor += amount;
-        } else nonCashMinor += amount;
-        if (p.verifiedExternal)
-          throw new BadRequestException(
-            "Manual tenders cannot claim external verification.",
-          );
-        paid += amount;
-      }
-      if (paid < held.totalMinor)
-        throw new BadRequestException("Tender total is below the order total.");
-      if (nonCashMinor > held.totalMinor)
-        throw new BadRequestException(
-          "Non-cash tender cannot exceed the sale amount.",
-        );
-      if (paid > held.totalMinor && !hasCash)
-        throw new BadRequestException("Only cash tender may include change.");
-      if (paid > held.totalMinor && paid - held.totalMinor > cashMinor)
-        throw new BadRequestException(
-          "Change cannot exceed cash tender received.",
-        );
+      const tender = await this.validateTender(tx, actor, payments, held.totalMinor);
       const updated = await tx.posOrder.update({
         where: { id: held.id },
         data: {
           registerId: register.id,
           status: "PAID",
-          paidMinor: paid,
-          changeMinor: Math.max(0, paid - held.totalMinor),
+          paidMinor: tender.paidMinor,
+          changeMinor: tender.changeMinor,
           payments: {
             create: payments.map((p: any) => ({
               organizationId: actor.organizationId,
