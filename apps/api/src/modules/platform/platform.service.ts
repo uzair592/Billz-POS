@@ -43,7 +43,7 @@ const DEFAULT_ROLES: Record<string, string[]> = {
     "pos.sale.reprint", "tables.view", "tables.manage", "orders.dinein.create", "orders.dinein.send", "orders.dinein.settle", "kitchen.tickets.view", "kitchen.tickets.ready",
   ],
   cashier: ["organization.view", "pos.catalog.view", "pos.register.open", "pos.sale.create", "pos.sale.history", "pos.sale.reprint", "tables.view", "orders.dinein.settle"],
-  waiter: ["organization.view", "pos.catalog.view", "pos.sale.create", "pos.sale.history", "tables.view", "orders.dinein.create", "orders.dinein.send"],
+  waiter: ["organization.view", "pos.catalog.view", "pos.sale.create", "pos.sale.history", "tables.view", "kitchen.stations.view", "orders.dinein.create", "orders.dinein.send"],
   kitchen_staff: ["organization.view", "kitchen.tickets.view", "kitchen.tickets.ready"],
   inventory_manager: ["organization.view"],
   accountant: ["organization.view"],

@@ -21,7 +21,7 @@ export class Phase4Controller {
   constructor(private readonly service: Phase4Service) {}
   @Get("tables") @RequirePermissions("tables.view") tables(@CurrentUser() u: UserPrincipal, @Query("branchId", new ParseUUIDPipe()) branchId: string) { return this.service.tables(u, branchId); }
   @Post("tables") @RequirePermissions("tables.manage") createTable(@CurrentUser() u: UserPrincipal, @Body(new ZodValidationPipe(table)) body: any) { return this.service.createTable(u, body); }
-  @Get("stations") @RequirePermissions("kitchen.tickets.view") stations(@CurrentUser() u: UserPrincipal, @Query("branchId", new ParseUUIDPipe()) branchId: string) { return this.service.stations(u, branchId); }
+  @Get("stations") @RequirePermissions("kitchen.stations.view") stations(@CurrentUser() u: UserPrincipal, @Query("branchId", new ParseUUIDPipe()) branchId: string) { return this.service.stations(u, branchId); }
   @Post("stations") @RequirePermissions("tables.manage") createStation(@CurrentUser() u: UserPrincipal, @Body(new ZodValidationPipe(station)) body: any) { return this.service.createStation(u, body); }
   @Post("dine-in/orders") @RequirePermissions("orders.dinein.create") open(@CurrentUser() u: UserPrincipal, @Headers("idempotency-key") key: string, @Body(new ZodValidationPipe(order)) body: any, @Req() req: any) { return this.service.openOrder(u, body, key, requestMetadata(req)); }
   @Post("dine-in/orders/:id/additions") @RequirePermissions("orders.dinein.send") add(@CurrentUser() u: UserPrincipal, @Param("id", ParseUUIDPipe) id: string, @Headers("idempotency-key") key: string, @Body(new ZodValidationPipe(additions)) body: any, @Req() req: any) { return this.service.addItems(u, id, body, key, requestMetadata(req)); }

@@ -64,7 +64,7 @@ export class Phase4Service {
       const prior = await this.idem(tx, actor, key, "phase4.dinein.add", { orderId, ...input }); if (prior) return prior;
       await tx.$queryRaw(Prisma.sql`SELECT id FROM pos_orders WHERE id = CAST(${orderId} AS uuid) AND organization_id = CAST(${actor.organizationId} AS uuid) FOR UPDATE`);
       const order = await tx.posOrder.findFirst({ where: { id: orderId, organizationId: actor.organizationId }, include: { tickets: true } }); if (!order) throw new NotFoundException("Dine-in order not found.");
-      await this.branch(tx, actor, order.branchId); if (!["UNPAID", "OPEN", "SUBMITTED"].includes(order.status) || ["CLOSED", "VOID", "PAID"].includes(order.serviceStatus)) throw new ConflictException("This order can no longer accept additions."); if (order.version !== input.expectedVersion) throw new ConflictException("Order changed; refresh before adding items.");
+      await this.branch(tx, actor, order.branchId); if (order.orderType !== "DINE_IN" || !["UNPAID", "OPEN"].includes(order.status) || ["CLOSED", "VOID", "PAID", "CANCELLED"].includes(order.serviceStatus)) throw new ConflictException("This order can no longer accept additions."); if (order.version !== input.expectedVersion) throw new ConflictException("Order changed; refresh before adding items.");
       const station = await tx.kitchenStation.findFirst({ where: { id: input.stationId, organizationId: actor.organizationId, branchId: order.branchId, isActive: true } }); if (!station) throw new NotFoundException("Kitchen station not found.");
       const quote = await this.pos.quote(tx, actor, { branchId: order.branchId, items: input.items }); const sequence = order.tickets.reduce((max: number, t: any) => Math.max(max, t.sequence), 0) + 1;
       await tx.posOrderItem.createMany({ data: quote.lines.map((line: any) => ({ ...line, orderId: order.id })) });
@@ -85,7 +85,7 @@ export class Phase4Service {
       await tx.$queryRaw(Prisma.sql`SELECT id FROM pos_orders WHERE id = CAST(${orderId} AS uuid) AND organization_id = CAST(${actor.organizationId} AS uuid) FOR UPDATE`);
       const order = await tx.posOrder.findFirst({ where: { id: orderId, organizationId: actor.organizationId }, include: { table: true } });
       if (!order) throw new NotFoundException("Dine-in order not found."); await this.branch(tx, actor, order.branchId);
-      if (order.status === "PAID" || order.serviceStatus === "CLOSED") throw new ConflictException("Order is already settled.");
+      if (order.orderType !== "DINE_IN" || !["UNPAID", "OPEN"].includes(order.status) || ["CLOSED", "VOID", "PAID", "CANCELLED"].includes(order.serviceStatus)) throw new ConflictException("Only an eligible open dine-in order can be settled.");
       const register = await this.pos.lockOpenRegister(tx, actor, input.registerId, order.branchId); if (!register) throw new BadRequestException("An open register for this branch is required.");
       const payments = input.payments ?? []; if (!payments.length) throw new BadRequestException("At least one payment is required.");
       const tender = await this.pos.validateTender(tx, actor, payments, order.totalMinor);
