@@ -12,6 +12,13 @@ export default function CashierDineInPage() {
   const [amount, setAmount] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  const [command, setCommand] = useState<{
+    key: string;
+    orderId: string;
+    body: any;
+  } | null>(null);
+  const [receiptOrderId, setReceiptOrderId] = useState("");
   useEffect(() => {
     api<any[]>("/branches")
       .then((x) => setBranchId(x[0]?.id ?? ""))
@@ -33,23 +40,38 @@ export default function CashierDineInPage() {
       .catch((e) => setError(e.message));
   }, [branchId]);
   async function settle() {
+    const body =
+      command?.orderId === orderId
+        ? command.body
+        : {
+            registerId,
+            payments: [{ method: "CASH", amountMinor: Number(amount) }],
+          };
+    const frozen =
+      command?.orderId === orderId
+        ? command
+        : { key: crypto.randomUUID(), orderId, body };
+    setCommand(frozen);
+    setPending(true);
+    setError("");
     try {
       const result = await api<any>(
         `/phase4/dine-in/orders/${orderId}/settle`,
         {
           method: "POST",
-          headers: { "Idempotency-Key": crypto.randomUUID() },
-          body: JSON.stringify({
-            registerId,
-            payments: [{ method: "CASH", amountMinor: Number(amount) }],
-          }),
+          headers: { "Idempotency-Key": frozen.key },
+          body: JSON.stringify(frozen.body),
         },
       );
       setMessage(
         `Settled ${result.receipt?.receiptNumber ?? "order"}; receipt ready`,
       );
+      setReceiptOrderId(orderId);
+      setCommand(null);
     } catch (e: any) {
-      setError(e.message);
+      setError(`Settlement was not confirmed. Retry safely: ${e.message}`);
+    } finally {
+      setPending(false);
     }
   }
   return (
@@ -62,6 +84,7 @@ export default function CashierDineInPage() {
             <select
               value={orderId}
               onChange={(e) => {
+                if (command) return;
                 setOrderId(e.target.value);
                 setAmount(
                   String(
@@ -85,7 +108,9 @@ export default function CashierDineInPage() {
             Register
             <select
               value={registerId}
-              onChange={(e) => setRegisterId(e.target.value)}
+              onChange={(e) => {
+                if (!command) setRegisterId(e.target.value);
+              }}
             >
               {registers.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -98,11 +123,30 @@ export default function CashierDineInPage() {
             label="Tender amount"
             aria-label="Tender amount"
             value={amount}
-            onChange={(e) => setAmount(e.target.value)}
+            onChange={(e) => {
+              if (!command) setAmount(e.target.value);
+            }}
           />
-          <Button disabled={!orderId || !registerId} onClick={settle}>
-            Settle order
+          <Button
+            disabled={pending || !orderId || !registerId}
+            onClick={settle}
+          >
+            {pending
+              ? "Settling…"
+              : command
+                ? "Retry same settlement"
+                : "Settle order"}
           </Button>
+          {receiptOrderId && (
+            <a
+              className="button"
+              href={`/api/v1/pos/orders/${receiptOrderId}/receipt?format=html`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open receipt
+            </a>
+          )}
           {!orders.length && <p>Loading open orders…</p>}
           {error && <p role="alert">{error}</p>}
           {message && <p role="status">{message}</p>}
