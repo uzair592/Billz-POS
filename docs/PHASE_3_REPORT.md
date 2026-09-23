@@ -2,7 +2,7 @@
 
 ## Status
 
-Financial/API repair is passing on branch `feature/phase-3-pos-acceptance`; overall completion remains open until the real browser workflow passes.
+Phase 3 acceptance repair passed on branch `feature/phase-3-pos-acceptance`; Phase 4 has not started.
 
 ## Evidence
 
@@ -15,14 +15,16 @@ Financial/API repair is passing on branch `feature/phase-3-pos-acceptance`; over
 
 ## Acceptance gates
 
-Fresh isolated migration result: all 13 migrations, including `20260924000300_phase_3_integrity_checkout` and `20260924000400_phase_3_register_close`, applied successfully. The API suite is direct HTTP/database coverage; browser coverage is separately tracked above and is not claimed as passed.
+Additional command evidence: `corepack pnpm prisma migrate deploy` passed with 14 migrations; `node scripts/phase-3-browser.cjs` passed with Playwright visible desktop/mobile workflow.
 
-The replacement browser flow (`scripts/capture-phase-3.cjs`) now provisions only its fixture through the platform API and then uses visible login, category, product, branch, register, variant/modifier, payment, checkout, and receipt controls. The current run is **OPEN**: Chrome reached the hydrated Menu screen, but the CDP interaction did not trigger the React category submit event. Direct API/database tests pass; the visible UI gate still requires an interactive browser rerun.
+Fresh isolated migration result: all 14 migrations, including `20260924000300_phase_3_integrity_checkout`, `20260924000400_phase_3_register_close`, and `20260924000500_phase_3_tax_override_permission`, applied successfully. The API suite is direct HTTP/database coverage; browser coverage is separately listed below.
 
-Browser walkthrough evidence: `scripts/capture-phase-3.cjs` rendered menu, POS, and receipt screens at desktop, tablet, and mobile viewport sizes. Screenshots are stored under `docs/phase-3/screenshots/`.
+The Playwright browser flow (`scripts/phase-3-browser.cjs`) provisions only its fixture through the platform API, then uses visible login, category, product, branch, register, variant/modifier, payment, checkout, and receipt controls. It passed on desktop and mobile, verified persisted category/product/sale/receipt data, and rejected loading/error text before screenshots. The prior hand-built CDP smoke script is no longer acceptance evidence.
 
-PAY-01 and TAX-01 HTTP/database cases pass, including retained-sale refund accounting and register-close concurrency. REC-01 API receipt cases pass (historical snapshot, 80mm HTML, PDF); the real browser reprint walkthrough remains open. Physical printer delivery is **UNVERIFIED** because no printer hardware was available.
+Browser walkthrough evidence: `scripts/phase-3-browser.cjs` passed; screenshots are stored under `docs/phase-3/screenshots/playwright-*.png`.
+
+PAY-01, TAX-01, and the Phase 3 browser gate pass: split-tender invariants, retained-sale refund accounting, register-close concurrency, historical/API receipts, and the Playwright visible-form sale/reprint flow. Physical printer delivery is **UNVERIFIED** because no printer hardware was available.
 
 ## Known limitations
 
-Remaining risks: the interactive browser acceptance flow is not yet green; combo pricing remains deliberately disabled until component pricing/stock semantics are implemented; discounts/service charges and full order state machines remain future work; the PDF renderer is intentionally minimal and should receive visual review; physical printer/USB scanner testing is unverified.
+Remaining risks: combo pricing remains deliberately disabled until component pricing/stock semantics are implemented; discounts/service charges and full order state machines remain future work; the PDF renderer is intentionally minimal and should receive visual review; physical printer/USB scanner testing is unverified.

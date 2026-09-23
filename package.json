@@ -17,8 +17,9 @@
     "db:seed": "tsc prisma/seed.ts --module commonjs --target es2022 --moduleResolution node --esModuleInterop --skipLibCheck --outDir tmp/seed && node tmp/seed/seed.js"
   },
   "devDependencies": {
-    "@types/node": "^22.15.0",
+    "@playwright/test": "1.51.1",
     "@prisma/client": "^6.7.0",
+    "@types/node": "^22.15.0",
     "argon2": "^0.41.1",
     "prettier": "^3.5.3",
     "prisma": "^6.7.0",
