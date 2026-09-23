@@ -40,3 +40,11 @@ Commit `6b698af` shares Phase 3 tender validation and register locking with dine
 The latest changes also route Phase 3 create/resume checkout through the same `validateTender` helper used by dine-in settlement. Kitchen and cashier screens now load selectable records and display ticket/order state and saved totals. No three-session browser result is claimed yet.
 
 Latest increment: migration `20260924000800_phase_4_station_read_permission` adds the narrowly scoped `kitchen.stations.view` permission for waiter station selection; ticket endpoints still require kitchen-ticket permissions. Dine-in additions and settlement now require `DINE_IN` and eligible open state. Waiter checkout retains one frozen body/key across an uncertain retry. Prisma migrate deploy, Prisma validate, typecheck, and diff check passed. Dedicated database concurrency tests and the three-session browser walkthrough remain open; Phase 5 has not started.
+
+Additional verification from `cb51f22` onward:
+
+- Migration `20260924000900_phase_4_station_role_rollout` grants station-read only to existing system manager, waiter, and kitchen_staff roles; customized roles are untouched. `prisma migrate deploy` applied it successfully.
+- `corepack pnpm prisma validate` — passed.
+- `corepack pnpm typecheck` — passed.
+- Bounded Phase 3 Jest command (`RUN_DATABASE_TESTS=true`, 10-second bound) — timed out before test output; the child process was then force-stopped. No pass is claimed.
+- Bounded production build (`corepack pnpm build`, 10-second bound) — timed out after Next.js reported “Creating an optimized production build”; no final exit code was produced. No build pass is claimed.
