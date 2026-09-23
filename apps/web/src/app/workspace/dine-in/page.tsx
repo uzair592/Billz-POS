@@ -16,6 +16,7 @@ export default function DineInPage() {
   const [quantity, setQuantity] = useState("1");
   const [notes, setNotes] = useState("");
   const [order, setOrder] = useState<any>(null);
+  const [openOrders, setOpenOrders] = useState<any[]>([]);
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -35,14 +36,16 @@ export default function DineInPage() {
       api<any[]>(`/phase4/tables?branchId=${branchId}`),
       api<any[]>(`/phase4/stations?branchId=${branchId}`),
       api<any[]>(`/pos/catalog?branchId=${branchId}`),
+      api<any[]>(`/phase4/dine-in/open?branchId=${branchId}`),
     ])
-      .then(([t, s, p]) => {
+      .then(([t, s, p, existing]) => {
         setTables(t);
         setStations(s);
         setProducts(p);
         setTableId(t[0]?.id ?? "");
         setStationId(s[0]?.id ?? "");
         setProductId(p[0]?.id ?? "");
+        setOpenOrders(existing);
       })
       .catch((e) => setError(e.message));
   }, [branchId]);
@@ -111,6 +114,27 @@ export default function DineInPage() {
               {tables.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Continue open order
+            <select
+              value={order?.id ?? ""}
+              onChange={(e) => {
+                const selected =
+                  openOrders.find((item) => item.id === e.target.value) ?? null;
+                setOrder(selected);
+                if (selected?.tableId) setTableId(selected.tableId);
+                setCommand(null);
+              }}
+            >
+              <option value="">Start a new table order</option>
+              {openOrders.map((item) => (
+                <option key={item.id} value={item.id}>
+                  Order {item.orderNumber} · {item.table?.name} · version{" "}
+                  {item.version}
                 </option>
               ))}
             </select>

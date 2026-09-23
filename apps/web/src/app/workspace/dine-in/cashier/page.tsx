@@ -36,7 +36,7 @@ export default function CashierDineInPage() {
         setRegisters(r.filter((x) => !x.closedAt));
         setOrderId(o[0]?.id ?? "");
         setRegisterId(r.find((x) => !x.closedAt)?.id ?? "");
-        setAmount(String(o[0]?.totalMinor ?? 0));
+        setAmount(((o[0]?.totalMinor ?? 0) / 100).toFixed(2));
       })
       .catch((e) => setError(e.message));
   }, [branchId]);
@@ -46,7 +46,12 @@ export default function CashierDineInPage() {
         ? command.body
         : {
             registerId,
-            payments: [{ method: tenderMethod, amountMinor: Number(amount) }],
+            payments: [
+              {
+                method: tenderMethod,
+                amountMinor: Math.round(Number(amount) * 100),
+              },
+            ],
           };
     const frozen =
       command?.orderId === orderId
@@ -89,8 +94,8 @@ export default function CashierDineInPage() {
                 setOrderId(e.target.value);
                 setAmount(
                   String(
-                    orders.find((o) => o.id === e.target.value)?.totalMinor ??
-                      0,
+                    (orders.find((o) => o.id === e.target.value)?.totalMinor ??
+                      0) / 100,
                   ),
                 );
               }}
@@ -121,8 +126,12 @@ export default function CashierDineInPage() {
             </select>
           </label>
           <Input
-            label="Tender amount"
-            aria-label="Tender amount"
+            label="Tender amount (PKR)"
+            aria-label="Tender amount in PKR"
+            type="number"
+            min="0.01"
+            step="0.01"
+            inputMode="decimal"
             value={amount}
             onChange={(e) => {
               if (!command) setAmount(e.target.value);
