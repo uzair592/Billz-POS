@@ -7,7 +7,6 @@ import { PosService } from "./pos.service";
 
 type Actor = { organizationId: string; userId: string; branchIds: string[]; isOwner?: boolean; permissions?: string[] };
 const MAX_MINOR = 2_000_000_000;
-const BUILTIN_TENDERS = new Set(["CASH", "CARD", "BANK_TRANSFER", "MOBILE_WALLET"]);
 const safeAmount = (value: unknown) => {
   if (!Number.isSafeInteger(value) || Number(value) < 0 || Number(value) > MAX_MINOR) throw new BadRequestException("Amount must be a safe integer.");
   return Number(value);
@@ -20,6 +19,11 @@ export class Phase4Service {
     if (!actor.isOwner && !actor.branchIds.includes(branchId)) throw new ForbiddenException("You are not assigned to this branch.");
     const branch = await tx.branch.findFirst({ where: { id: branchId, organizationId: actor.organizationId, isActive: true } });
     if (!branch) throw new NotFoundException("Branch not found.");
+    if (!actor.isOwner) {
+      const assignments = await tx.userRole.findMany({ where: { organizationId: actor.organizationId, userId: actor.userId }, select: { role: { select: { scope: true } } } });
+      const scoped = assignments.map((a: any) => a.role.scope?.branchIds).filter((ids: unknown): ids is string[] => Array.isArray(ids));
+      if (scoped.length && !scoped.some((ids: string[]) => ids.includes(branchId))) throw new ForbiddenException("Your role scope does not include this branch.");
+    }
     return branch;
   }
   async tables(actor: Actor, branchId: string) { return this.prisma.withTenant(actor.organizationId, async (tx) => { await this.branch(tx, actor, branchId); return tx.floorTable.findMany({ where: { organizationId: actor.organizationId, branchId, isActive: true }, orderBy: { name: "asc" } }); }); }
@@ -81,14 +85,10 @@ export class Phase4Service {
       const order = await tx.posOrder.findFirst({ where: { id: orderId, organizationId: actor.organizationId }, include: { table: true } });
       if (!order) throw new NotFoundException("Dine-in order not found."); await this.branch(tx, actor, order.branchId);
       if (order.status === "PAID" || order.serviceStatus === "CLOSED") throw new ConflictException("Order is already settled.");
-      const register = await tx.registerSession.findFirst({ where: { id: input.registerId, organizationId: actor.organizationId, branchId: order.branchId, closedAt: null } }); if (!register) throw new BadRequestException("An open register for this branch is required.");
+      const register = await this.pos.lockOpenRegister(tx, actor, input.registerId, order.branchId); if (!register) throw new BadRequestException("An open register for this branch is required.");
       const payments = input.payments ?? []; if (!payments.length) throw new BadRequestException("At least one payment is required.");
-      let paid = 0, cash = 0;
-      for (const p of payments) { const amount = safeAmount(p.amountMinor); if (amount <= 0) throw new BadRequestException("Payment amount must be positive."); const method = String(p.method).toUpperCase(); if (!BUILTIN_TENDERS.has(method) && !(await tx.paymentMethod.findFirst({ where: { organizationId: actor.organizationId, key: p.method, isActive: true } }))) throw new BadRequestException(`Payment method ${p.method} is not active.`); if (p.verifiedExternal) throw new BadRequestException("Manual tenders cannot claim external verification."); paid += amount; if (method === "CASH") cash += amount; }
-      const noncash = paid - cash; if (noncash > order.totalMinor) throw new BadRequestException("Non-cash tender cannot exceed the sale amount.");
-      if (paid < order.totalMinor) throw new BadRequestException("Tender is below the sale total.");
-      const change = paid - order.totalMinor; if (change > cash) throw new BadRequestException("Change cannot exceed cash tender received.");
-      const updated = await tx.posOrder.update({ where: { id: order.id }, data: { registerId: register.id, status: "PAID", serviceStatus: "CLOSED", paidMinor: paid, changeMinor: change, version: { increment: 1 }, payments: { create: payments.map((p: any) => ({ organizationId: actor.organizationId, method: p.method, amountMinor: safeAmount(p.amountMinor), reference: p.reference, tenderKind: "MANUAL" })) } } });
+      const tender = await this.pos.validateTender(tx, actor, payments, order.totalMinor);
+      const updated = await tx.posOrder.update({ where: { id: order.id }, data: { registerId: register.id, status: "PAID", serviceStatus: "CLOSED", paidMinor: tender.paidMinor, changeMinor: tender.changeMinor, version: { increment: 1 }, payments: { create: payments.map((p: any) => ({ organizationId: actor.organizationId, method: p.method, amountMinor: safeAmount(p.amountMinor), reference: p.reference, tenderKind: "MANUAL" })) } } });
       const receipt = await tx.posReceipt.create({ data: { organizationId: actor.organizationId, orderId: order.id, receiptNumber: `R-${String(order.orderNumber).padStart(6, "0")}` } });
       if (order.tableId) await tx.floorTable.update({ where: { id: order.tableId }, data: { status: "AVAILABLE" } });
       await this.audit.create({ organizationId: actor.organizationId, userId: actor.userId, actorType: "USER", actorId: actor.userId, action: "dinein.order.settled", entityType: "PosOrder", entityId: order.id, branchId: order.branchId, ...meta }, tx);
