@@ -159,6 +159,7 @@ model Organization {
   kitchenStations       KitchenStation[]
   kitchenTickets        KitchenTicket[]
   kitchenOutbox         KitchenOutbox[]
+  serviceBookings       ServiceBooking[]
 
   @@map("organizations")
 }
@@ -291,6 +292,7 @@ model Branch {
   floorTables     FloorTable[]
   kitchenStations KitchenStation[]
   kitchenTickets  KitchenTicket[]
+  serviceBookings ServiceBooking[]
 
   @@unique([organizationId, code])
   @@unique([id, organizationId])
@@ -656,18 +658,19 @@ model PosOrder {
 }
 
 model FloorTable {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @map("organization_id") @db.Uuid
-  branchId       String       @map("branch_id") @db.Uuid
-  name           String       @db.VarChar(80)
-  capacity       Int          @default(2)
-  status         String       @default("AVAILABLE") @db.VarChar(20)
-  isActive       Boolean      @default(true) @map("is_active")
-  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  branchId       String           @map("branch_id") @db.Uuid
+  name           String           @db.VarChar(80)
+  capacity       Int              @default(2)
+  status         String           @default("AVAILABLE") @db.VarChar(20)
+  isActive       Boolean          @default(true) @map("is_active")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  branch         Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
   orders         PosOrder[]
+  bookings       ServiceBooking[]
 
   @@unique([organizationId, branchId, name])
   @@unique([id, organizationId, branchId])
@@ -732,6 +735,33 @@ model KitchenOutbox {
   @@map("kitchen_outbox")
 }
 
+model ServiceBooking {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  branchId       String       @map("branch_id") @db.Uuid
+  tableId        String?      @map("table_id") @db.Uuid
+  kind           String       @default("RESERVATION") @db.VarChar(30)
+  status         String       @default("CONFIRMED") @db.VarChar(30)
+  customerName   String       @map("customer_name") @db.VarChar(150)
+  contact        String?      @db.VarChar(100)
+  partySize      Int          @default(1) @map("party_size")
+  startsAt       DateTime     @map("starts_at") @db.Timestamptz(3)
+  endsAt         DateTime     @map("ends_at") @db.Timestamptz(3)
+  notes          String?      @db.VarChar(500)
+  details        Json         @default("{}")
+  depositMinor   Int          @default(0) @map("deposit_minor")
+  appliedOrderId String?      @unique @map("applied_order_id") @db.Uuid
+  version        Int          @default(1)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  branch         Branch       @relation(fields: [branchId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  table          FloorTable?  @relation(fields: [tableId, organizationId, branchId], references: [id, organizationId, branchId], onDelete: Restrict)
+
+  @@index([organizationId, branchId, startsAt])
+  @@map("service_bookings")
+}
+
 model PosOrderItem {
   id             String          @id @default(uuid()) @db.Uuid
   organizationId String          @map("organization_id") @db.Uuid
@@ -744,6 +774,7 @@ model PosOrderItem {
   taxMinor       Int             @map("tax_minor")
   lineTotalMinor Int             @map("line_total_minor")
   modifiers      Json            @default("[]")
+  notesSnapshot  String?         @map("notes_snapshot") @db.VarChar(500)
   order          PosOrder        @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product        Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)

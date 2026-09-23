@@ -7,28 +7,393 @@ import { randomUUID } from "node:crypto";
 import { AppModule } from "../src/app.module";
 import { hashPassword } from "../src/common/security";
 
-const run = process.env.RUN_DATABASE_TESTS === "true" ? describe : describe.skip;
+const run =
+  process.env.RUN_DATABASE_TESTS === "true" ? describe : describe.skip;
 run("Phase 4 dine-in acceptance", () => {
-  let app: INestApplication; const db = new PrismaClient(); let admin: ReturnType<typeof request.agent>; let owner: ReturnType<typeof request.agent>; let csrf = ""; let orgId = ""; let branchId = ""; let productId = ""; let tableId = ""; let stationId = ""; let registerId = ""; const suffix = randomUUID().slice(0, 8); const password = "Phase4-Owner-2026!";
+  let app: INestApplication;
+  const db = new PrismaClient();
+  let admin: ReturnType<typeof request.agent>;
+  let owner: ReturnType<typeof request.agent>;
+  let waiterA: ReturnType<typeof request.agent>;
+  let waiterB: ReturnType<typeof request.agent>;
+  let manager: ReturnType<typeof request.agent>;
+  let waiterACsrf = "",
+    waiterBCsrf = "",
+    managerCsrf = "",
+    waiterAId = "",
+    waiterBId = "";
+  let csrf = "";
+  let orgId = "";
+  let branchId = "";
+  let productId = "";
+  let tableId = "";
+  let transferTableId = "";
+  let stationId = "";
+  let registerId = "";
+  const suffix = randomUUID().slice(0, 8);
+  const password = "Phase4-Owner-2026!";
   beforeAll(async () => {
-    const module = await Test.createTestingModule({ imports: [AppModule] }).compile(); app = module.createNestApplication(); app.setGlobalPrefix("api/v1"); app.use(cookieParser()); await app.init();
-    const adminPassword = "Phase4-Admin-2026!"; await db.platformAdmin.create({ data: { email: `p4-${suffix}@example.test`, name: "P4", passwordHash: await hashPassword(adminPassword) } }); const plan = await db.subscriptionPlan.create({ data: { code: `p4-${suffix}`, name: "P4", maxBranches: 5, maxUsers: 20, maxDevices: 5 } });
-    admin = request.agent(app.getHttpServer()); const al = await admin.post("/api/v1/platform/auth/login").send({ email: `p4-${suffix}@example.test`, password: adminPassword }).expect(201); const provision = await admin.post("/api/v1/platform/organizations").set("x-csrf-token", al.body.csrfToken).send({ name: `P4 ${suffix}`, businessType: "CAFE", email: `owner-${suffix}@example.test`, phone: "03001234567", ownerName: "P4 Owner", ownerUsername: `p4owner-${suffix}`, temporaryPassword: password, planId: plan.id, moduleIds: [] }).expect(201); orgId = provision.body.id;
-    owner = request.agent(app.getHttpServer()); let login = await owner.post("/api/v1/auth/login").send({ identifier: `p4owner-${suffix}`, password }).expect(201); csrf = login.body.csrfToken; if (login.body.user?.mustChangePassword) { await owner.post("/api/v1/auth/change-temporary-password").set("x-csrf-token", csrf).send({ currentPassword: password, newPassword: `${password}New` }).expect(201); login = await owner.post("/api/v1/auth/login").send({ identifier: `p4owner-${suffix}`, password: `${password}New` }).expect(201); csrf = login.body.csrfToken; }
+    const module = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+    app = module.createNestApplication();
+    app.setGlobalPrefix("api/v1");
+    app.use(cookieParser());
+    await app.init();
+    const adminPassword = "Phase4-Admin-2026!";
+    await db.platformAdmin.create({
+      data: {
+        email: `p4-${suffix}@example.test`,
+        name: "P4",
+        passwordHash: await hashPassword(adminPassword),
+      },
+    });
+    const plan = await db.subscriptionPlan.create({
+      data: {
+        code: `p4-${suffix}`,
+        name: "P4",
+        maxBranches: 5,
+        maxUsers: 20,
+        maxDevices: 5,
+      },
+    });
+    admin = request.agent(app.getHttpServer());
+    const al = await admin
+      .post("/api/v1/platform/auth/login")
+      .send({ email: `p4-${suffix}@example.test`, password: adminPassword })
+      .expect(201);
+    const provision = await admin
+      .post("/api/v1/platform/organizations")
+      .set("x-csrf-token", al.body.csrfToken)
+      .send({
+        name: `P4 ${suffix}`,
+        businessType: "CAFE",
+        email: `owner-${suffix}@example.test`,
+        phone: "03001234567",
+        ownerName: "P4 Owner",
+        ownerUsername: `p4owner-${suffix}`,
+        temporaryPassword: password,
+        planId: plan.id,
+        moduleIds: [],
+      })
+      .expect(201);
+    orgId = provision.body.id;
+    owner = request.agent(app.getHttpServer());
+    let login = await owner
+      .post("/api/v1/auth/login")
+      .send({ identifier: `p4owner-${suffix}`, password })
+      .expect(201);
+    csrf = login.body.csrfToken;
+    if (login.body.user?.mustChangePassword) {
+      await owner
+        .post("/api/v1/auth/change-temporary-password")
+        .set("x-csrf-token", csrf)
+        .send({ currentPassword: password, newPassword: `${password}New` })
+        .expect(201);
+      login = await owner
+        .post("/api/v1/auth/login")
+        .send({ identifier: `p4owner-${suffix}`, password: `${password}New` })
+        .expect(201);
+      csrf = login.body.csrfToken;
+    }
     branchId = (await owner.get("/api/v1/branches").expect(200)).body[0].id;
-    productId = (await owner.post("/api/v1/pos/products").set("x-csrf-token", csrf).send({ name: "Dine-in Coffee", prices: [{ branchId, priceMinor: 1000 }], modifierConfig: [{ id: "oat", name: "Oat", priceMinor: 100, active: true }] }).expect(201)).body.id;
-    tableId = (await owner.post("/api/v1/phase4/tables").set("x-csrf-token", csrf).send({ branchId, name: "T1", capacity: 2 }).expect(201)).body.id;
-    stationId = (await owner.post("/api/v1/phase4/stations").set("x-csrf-token", csrf).send({ branchId, name: "Hot" }).expect(201)).body.id;
-    registerId = (await owner.post("/api/v1/pos/registers/open").set("x-csrf-token", csrf).send({ branchId, openingFloatMinor: 0 }).expect(201)).body.id;
+    const waiterRole = await db.role.findFirstOrThrow({
+      where: { organizationId: orgId, key: "waiter" },
+    });
+    const managerRole = await db.role.findFirstOrThrow({
+      where: { organizationId: orgId, key: "manager" },
+    });
+    const staffPassword = await hashPassword("Phase4-Staff-2026!");
+    const makeStaff = async (username: string, name: string, roleId: string) =>
+      db.user.create({
+        data: {
+          organizationId: orgId,
+          username,
+          name,
+          passwordHash: staffPassword,
+          mustChangePassword: false,
+          branchMemberships: {
+            create: { branchId, isDefault: true },
+          },
+          roles: { create: { roleId } },
+        },
+      });
+    const a = await makeStaff(`waiter-a-${suffix}`, "Waiter A", waiterRole.id);
+    const b = await makeStaff(`waiter-b-${suffix}`, "Waiter B", waiterRole.id);
+    await makeStaff(`manager-${suffix}`, "Manager", managerRole.id);
+    waiterAId = a.id;
+    waiterBId = b.id;
+    const loginStaff = async (username: string) => {
+      const agent = request.agent(app.getHttpServer());
+      const response = await agent
+        .post("/api/v1/auth/login")
+        .send({ identifier: username, password: "Phase4-Staff-2026!" })
+        .expect(201);
+      return { agent, csrf: response.body.csrfToken as string };
+    };
+    ({ agent: waiterA, csrf: waiterACsrf } = await loginStaff(
+      `waiter-a-${suffix}`,
+    ));
+    ({ agent: waiterB, csrf: waiterBCsrf } = await loginStaff(
+      `waiter-b-${suffix}`,
+    ));
+    ({ agent: manager, csrf: managerCsrf } = await loginStaff(
+      `manager-${suffix}`,
+    ));
+    productId = (
+      await owner
+        .post("/api/v1/pos/products")
+        .set("x-csrf-token", csrf)
+        .send({
+          name: "Dine-in Coffee",
+          prices: [{ branchId, priceMinor: 1000 }],
+          modifierConfig: [
+            { id: "oat", name: "Oat", priceMinor: 100, active: true },
+          ],
+        })
+        .expect(201)
+    ).body.id;
+    tableId = (
+      await owner
+        .post("/api/v1/phase4/tables")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, name: "T1", capacity: 2 })
+        .expect(201)
+    ).body.id;
+    transferTableId = (
+      await owner
+        .post("/api/v1/phase4/tables")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, name: "T2", capacity: 4 })
+        .expect(201)
+    ).body.id;
+    stationId = (
+      await owner
+        .post("/api/v1/phase4/stations")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, name: "Hot" })
+        .expect(201)
+    ).body.id;
+    registerId = (
+      await owner
+        .post("/api/v1/pos/registers/open")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, openingFloatMinor: 0 })
+        .expect(201)
+    ).body.id;
   }, 60000);
-  afterAll(async () => { await app?.close(); await db.$disconnect(); });
+  afterAll(async () => {
+    await app?.close();
+    await db.$disconnect();
+  });
   it("serializes competing opens and preserves one ticket/outbox", async () => {
-    const body = { branchId, tableId, stationId, items: [{ productId, quantity: 1, modifiers: [{ id: "oat" }] }] };
-    const [a, b] = await Promise.all([owner.post("/api/v1/phase4/dine-in/orders").set("x-csrf-token", csrf).set("Idempotency-Key", randomUUID()).send(body), owner.post("/api/v1/phase4/dine-in/orders").set("x-csrf-token", csrf).set("Idempotency-Key", randomUUID()).send(body)]);
-    expect([a.status, b.status].sort()).toEqual([201, 409]); const orderId = a.status === 201 ? a.body.order.id : b.body.order.id; const counts = await db.$queryRaw<any[]>`SELECT (SELECT count(*) FROM pos_orders WHERE id=${orderId}::uuid) orders, (SELECT count(*) FROM kitchen_tickets WHERE order_id=${orderId}::uuid) tickets, (SELECT count(*) FROM kitchen_outbox WHERE ticket_id IN (SELECT id FROM kitchen_tickets WHERE order_id=${orderId}::uuid)) outbox`; expect(Number(counts[0].orders)).toBe(1); expect(Number(counts[0].tickets)).toBe(1); expect(Number(counts[0].outbox)).toBe(1);
-    const retry = await owner.post("/api/v1/phase4/dine-in/orders").set("x-csrf-token", csrf).set("Idempotency-Key", "retry-open-123").send(body); expect(retry.status).toBe(409);
+    const body = {
+      branchId,
+      tableId,
+      stationId,
+      items: [
+        {
+          productId,
+          quantity: 1,
+          modifiers: [{ id: "oat" }],
+          notes: "No sugar",
+        },
+      ],
+    };
+    const [a, b] = await Promise.all([
+      owner
+        .post("/api/v1/phase4/dine-in/orders")
+        .set("x-csrf-token", csrf)
+        .set("Idempotency-Key", randomUUID())
+        .send(body),
+      owner
+        .post("/api/v1/phase4/dine-in/orders")
+        .set("x-csrf-token", csrf)
+        .set("Idempotency-Key", randomUUID())
+        .send(body),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([201, 409]);
+    const orderId = a.status === 201 ? a.body.order.id : b.body.order.id;
+    const counts = await db.$queryRaw<
+      any[]
+    >`SELECT (SELECT count(*) FROM pos_orders WHERE id=${orderId}::uuid) orders, (SELECT count(*) FROM kitchen_tickets WHERE order_id=${orderId}::uuid) tickets, (SELECT count(*) FROM kitchen_outbox WHERE ticket_id IN (SELECT id FROM kitchen_tickets WHERE order_id=${orderId}::uuid)) outbox`;
+    expect(Number(counts[0].orders)).toBe(1);
+    expect(Number(counts[0].tickets)).toBe(1);
+    expect(Number(counts[0].outbox)).toBe(1);
+    const retry = await owner
+      .post("/api/v1/phase4/dine-in/orders")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", "retry-open-123")
+      .send(body);
+    expect(retry.status).toBe(409);
+  });
+  it("denies guessed waiter IDs and authorizes audited reassignment", async () => {
+    const source = (
+      await owner
+        .post("/api/v1/phase4/tables")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, name: `WA-${suffix}`, capacity: 2 })
+        .expect(201)
+    ).body;
+    const target = (
+      await owner
+        .post("/api/v1/phase4/tables")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, name: `WB-${suffix}`, capacity: 2 })
+        .expect(201)
+    ).body;
+    const opened = await waiterA
+      .post("/api/v1/phase4/dine-in/orders")
+      .set("x-csrf-token", waiterACsrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        branchId,
+        tableId: source.id,
+        stationId,
+        items: [{ productId, quantity: 1 }],
+      })
+      .expect(201);
+    const orderId = opened.body.order.id;
+    await waiterB.get(`/api/v1/phase4/dine-in/orders/${orderId}`).expect(403);
+    await waiterB
+      .post(`/api/v1/phase4/dine-in/orders/${orderId}/additions`)
+      .set("x-csrf-token", waiterBCsrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        stationId,
+        expectedVersion: 1,
+        items: [{ productId, quantity: 1 }],
+      })
+      .expect(403);
+    await manager
+      .post(`/api/v1/phase4/dine-in/orders/${orderId}/transfer`)
+      .set("x-csrf-token", managerCsrf)
+      .set("Idempotency-Key", `transfer-${suffix}`)
+      .send({ tableId: target.id, waiterId: waiterBId })
+      .expect(201);
+    await waiterA.get(`/api/v1/phase4/dine-in/orders/${orderId}`).expect(403);
+    await waiterB.get(`/api/v1/phase4/dine-in/orders/${orderId}`).expect(200);
+    const saved = await db.posOrder.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    expect(saved.createdById).toBe(waiterBId);
+    expect(saved.tableId).toBe(target.id);
+    expect(saved.version).toBe(2);
+    expect(
+      (await db.floorTable.findUniqueOrThrow({ where: { id: source.id } }))
+        .status,
+    ).toBe("AVAILABLE");
   });
   it("rejects non-dine-in settlement and settles eligible order once", async () => {
-    const order = await db.posOrder.findFirstOrThrow({ where: { organizationId: orgId, orderType: "DINE_IN" } }); const result = await owner.post(`/api/v1/phase4/dine-in/orders/${order.id}/settle`).set("x-csrf-token", csrf).set("Idempotency-Key", randomUUID()).send({ registerId, payments: [{ method: "CASH", amountMinor: order.totalMinor }] }).expect(201); expect(result.body.order.changeMinor).toBe(0); await expect(owner.post(`/api/v1/phase4/dine-in/orders/${order.id}/settle`).set("x-csrf-token", csrf).set("Idempotency-Key", randomUUID()).send({ registerId, payments: [{ method: "CASH", amountMinor: order.totalMinor }] })).resolves.toMatchObject({ status: 409 }); const rows = await db.posOrder.findUniqueOrThrow({ where: { id: order.id }, include: { payments: true, receipt: true, table: true } }); expect(rows.payments).toHaveLength(1); expect(rows.receipt).not.toBeNull(); expect(rows.table?.status).toBe("AVAILABLE");
+    const order = await db.posOrder.findFirstOrThrow({
+      where: {
+        organizationId: orgId,
+        orderType: "DINE_IN",
+        createdById: { notIn: [waiterAId, waiterBId] },
+      },
+    });
+    await owner
+      .post(`/api/v1/phase4/dine-in/orders/${order.id}/transfer`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ tableId: transferTableId })
+      .expect(201);
+    expect(
+      (await db.floorTable.findUniqueOrThrow({ where: { id: tableId } }))
+        .status,
+    ).toBe("AVAILABLE");
+    const result = await owner
+      .post(`/api/v1/phase4/dine-in/orders/${order.id}/settle`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        registerId,
+        payments: [{ method: "CASH", amountMinor: order.totalMinor }],
+      })
+      .expect(201);
+    expect(result.body.order.changeMinor).toBe(0);
+    await expect(
+      owner
+        .post(`/api/v1/phase4/dine-in/orders/${order.id}/settle`)
+        .set("x-csrf-token", csrf)
+        .set("Idempotency-Key", randomUUID())
+        .send({
+          registerId,
+          payments: [{ method: "CASH", amountMinor: order.totalMinor }],
+        }),
+    ).resolves.toMatchObject({ status: 409 });
+    const rows = await db.posOrder.findUniqueOrThrow({
+      where: { id: order.id },
+      include: { payments: true, receipt: true, table: true, items: true },
+    });
+    expect(rows.payments).toHaveLength(1);
+    expect(rows.receipt).not.toBeNull();
+    expect(rows.table?.status).toBe("AVAILABLE");
+    expect(rows.items[0]?.notesSnapshot).toBe("No sugar");
+    expect(rows.items[0]?.modifiers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "Oat", priceMinor: 100 }),
+      ]),
+    );
+    const receipt = await owner
+      .get(`/api/v1/pos/orders/${order.id}/receipt?format=html`)
+      .expect(200);
+    expect(receipt.text).toContain("Oat");
+    expect(receipt.text).toContain("No sugar");
+  });
+  it("prevents overlapping reservations and applies a deposit once", async () => {
+    const startsAt = new Date(Date.now() + 86_400_000).toISOString();
+    const endsAt = new Date(Date.now() + 90_000_000).toISOString();
+    const payload = {
+      branchId,
+      tableId,
+      kind: "RESERVATION",
+      customerName: "Deposit Guest",
+      partySize: 2,
+      startsAt,
+      endsAt,
+      depositMinor: 300,
+    };
+    const booking = await owner
+      .post("/api/v1/phase4/bookings")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send(payload)
+      .expect(201);
+    await owner
+      .post("/api/v1/phase4/bookings")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send(payload)
+      .expect(409);
+    const order = await db.posOrder.findFirstOrThrow({
+      where: {
+        organizationId: orgId,
+        createdById: waiterBId,
+        status: "UNPAID",
+      },
+    });
+    await owner
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/apply-deposit`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ orderId: order.id })
+      .expect(201);
+    await owner
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/apply-deposit`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ orderId: order.id })
+      .expect(409);
+    expect(
+      await db.posOrderPayment.count({
+        where: { orderId: order.id, method: "DEPOSIT" },
+      }),
+    ).toBe(1);
+    const saved = await db.serviceBooking.findUniqueOrThrow({
+      where: { id: booking.body.id },
+    });
+    expect(saved.appliedOrderId).toBe(order.id);
+    expect(saved.depositMinor).toBe(300);
   });
 });

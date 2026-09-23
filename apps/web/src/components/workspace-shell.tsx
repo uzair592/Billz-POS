@@ -27,6 +27,19 @@ const navigation = [
   { href: "/workspace", label: "Overview", icon: Building2 },
   { href: "/workspace/pos", label: "Point of sale", icon: ClipboardList },
   { href: "/workspace/menu", label: "Menu", icon: ClipboardList },
+  { href: "/workspace/service-setup", label: "Tables & kitchen", icon: Coffee },
+  {
+    href: "/workspace/bookings",
+    label: "Reservations & delivery",
+    icon: ClipboardList,
+  },
+  { href: "/workspace/dine-in", label: "Waiter service", icon: ClipboardList },
+  { href: "/workspace/kitchen", label: "Kitchen display", icon: Coffee },
+  {
+    href: "/workspace/dine-in/cashier",
+    label: "Dine-in cashier",
+    icon: ClipboardList,
+  },
   { href: "/workspace/branches", label: "Branches", icon: Building2 },
   { href: "/workspace/employees", label: "Employees", icon: Users },
   { href: "/workspace/roles", label: "Roles & permissions", icon: Shield },
@@ -46,7 +59,9 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   });
   useEffect(() => {
     if (!session.data?.user || session.data.user.restricted) return;
-    const timer = window.setInterval(() => { void api('/auth/heartbeat', {method:'POST'}).catch(() => undefined); }, 30_000);
+    const timer = window.setInterval(() => {
+      void api("/auth/heartbeat", { method: "POST" }).catch(() => undefined);
+    }, 30_000);
     return () => window.clearInterval(timer);
   }, [session.data?.user]);
 

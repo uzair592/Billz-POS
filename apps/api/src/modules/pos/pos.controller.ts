@@ -70,6 +70,7 @@ const itemSchema = z.object({
   variantId: z.string().uuid().optional(),
   quantity: z.number().int().positive(),
   modifiers: z.array(z.object({ id: z.string().min(1) })).optional(),
+  notes: z.string().trim().max(500).optional(),
 });
 const paymentSchema = z.object({
   method: z.string().min(1).max(40),
@@ -249,9 +250,13 @@ export class PosController {
             `  Modifiers: ${modifiers.map((m: any) => `${m.name} +${money(m.priceMinor)}`).join(", ")}`,
           ]
         : [];
+      const noteLine = item.notesSnapshot
+        ? [`  Note: ${item.notesSnapshot}`]
+        : [];
       return [
         `${item.nameSnapshot} x${item.quantity}  ${money(item.lineTotalMinor)}`,
         ...modifierLine,
+        ...noteLine,
       ];
     });
     const tenders = order.payments.map(
