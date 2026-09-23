@@ -8,17 +8,26 @@ export default function ServiceSetupPage() {
   const [branches, setBranches] = useState<any[]>([]);
   const [tables, setTables] = useState<any[]>([]);
   const [stations, setStations] = useState<any[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
   const [tableName, setTableName] = useState("");
   const [capacity, setCapacity] = useState("2");
   const [stationName, setStationName] = useState("");
   const [error, setError] = useState("");
+  const [transferOrderId, setTransferOrderId] = useState("");
+  const [transferTableId, setTransferTableId] = useState("");
   const refresh = async (id: string) => {
-    const [t, s] = await Promise.all([
+    const [t, s, o] = await Promise.all([
       api<any[]>(`/phase4/tables?branchId=${id}`),
       api<any[]>(`/phase4/stations?branchId=${id}`),
+      api<any[]>(`/phase4/dine-in/orders?branchId=${id}`),
     ]);
     setTables(t);
     setStations(s);
+    setOrders(o);
+    setTransferOrderId(o[0]?.id ?? "");
+    setTransferTableId(
+      t.find((table) => table.status === "AVAILABLE")?.id ?? "",
+    );
   };
   useEffect(() => {
     api<any[]>("/branches")
@@ -54,6 +63,18 @@ export default function ServiceSetupPage() {
         body: JSON.stringify({ branchId, name: stationName }),
       });
       setStationName("");
+      await refresh(branchId);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+  async function transferOrder() {
+    try {
+      await api(`/phase4/dine-in/orders/${transferOrderId}/transfer`, {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ tableId: transferTableId }),
+      });
       await refresh(branchId);
     } catch (e: any) {
       setError(e.message);
@@ -112,6 +133,43 @@ export default function ServiceSetupPage() {
           ))}
         </Card>
       </div>
+      <Card>
+        <h2>Transfer an open table</h2>
+        <label>
+          Order
+          <select
+            value={transferOrderId}
+            onChange={(e) => setTransferOrderId(e.target.value)}
+          >
+            {orders.map((order) => (
+              <option key={order.id} value={order.id}>
+                Order {order.orderNumber} · {order.table?.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Available table
+          <select
+            value={transferTableId}
+            onChange={(e) => setTransferTableId(e.target.value)}
+          >
+            {tables
+              .filter((table) => table.status === "AVAILABLE")
+              .map((table) => (
+                <option key={table.id} value={table.id}>
+                  {table.name}
+                </option>
+              ))}
+          </select>
+        </label>
+        <Button
+          disabled={!transferOrderId || !transferTableId}
+          onClick={transferOrder}
+        >
+          Transfer table
+        </Button>
+      </Card>
       {error && <p role="alert">{error}</p>}
     </main>
   );

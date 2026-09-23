@@ -47,6 +47,10 @@ const settle = z.object({
     )
     .min(1),
 });
+const transfer = z.object({
+  tableId: z.string().uuid(),
+  waiterId: z.string().uuid().optional(),
+});
 
 @Controller("phase4")
 @UseGuards(UserAuthGuard, PermissionGuard)
@@ -154,5 +158,16 @@ export class Phase4Controller {
     @Req() req: any,
   ) {
     return this.service.settle(u, id, body, key, requestMetadata(req));
+  }
+  @Post("dine-in/orders/:id/transfer")
+  @RequirePermissions("orders.dinein.transfer")
+  transferOrder(
+    @CurrentUser() u: UserPrincipal,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Headers("idempotency-key") key: string,
+    @Body(new ZodValidationPipe(transfer)) body: any,
+    @Req() req: any,
+  ) {
+    return this.service.transfer(u, id, body, key, requestMetadata(req));
   }
 }

@@ -65,6 +65,15 @@ export class Phase4Service {
     }
     return branch;
   }
+  private orderAccess(actor: Actor, order: any, mode: "view" | "edit") {
+    if (actor.isOwner || order.createdById === actor.userId) return;
+    const allowed =
+      mode === "view"
+        ? ["orders.dinein.settle", "orders.dinein.transfer"]
+        : ["orders.dinein.transfer"];
+    if (!allowed.some((permission) => actor.permissions?.includes(permission)))
+      throw new ForbiddenException("This order is assigned to another waiter.");
+  }
   async tables(actor: Actor, branchId: string) {
     return this.prisma.withTenant(actor.organizationId, async (tx) => {
       await this.branch(tx, actor, branchId);
@@ -284,6 +293,7 @@ export class Phase4Service {
       });
       if (!order) throw new NotFoundException("Dine-in order not found.");
       await this.branch(tx, actor, order.branchId);
+      this.orderAccess(actor, order, "edit");
       if (
         order.orderType !== "DINE_IN" ||
         !["UNPAID", "OPEN"].includes(order.status) ||
@@ -489,7 +499,113 @@ export class Phase4Service {
       });
       if (!order) throw new NotFoundException("Dine-in order not found.");
       await this.branch(tx, actor, order.branchId);
+      this.orderAccess(actor, order, "view");
       return order;
+    });
+  }
+  async transfer(
+    actor: Actor,
+    orderId: string,
+    input: any,
+    key: string,
+    meta: any,
+  ) {
+    return this.prisma.withTenant(actor.organizationId, async (tx) => {
+      const prior = await this.idem(tx, actor, key, "phase4.dinein.transfer", {
+        orderId,
+        ...input,
+      });
+      if (prior) return prior;
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM pos_orders WHERE id=CAST(${orderId} AS uuid) AND organization_id=CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
+      );
+      const order = await tx.posOrder.findFirst({
+        where: { id: orderId, organizationId: actor.organizationId },
+      });
+      if (!order) throw new NotFoundException("Dine-in order not found.");
+      await this.branch(tx, actor, order.branchId);
+      this.orderAccess(actor, order, "edit");
+      if (
+        order.orderType !== "DINE_IN" ||
+        order.status === "PAID" ||
+        order.serviceStatus === "CLOSED"
+      )
+        throw new ConflictException(
+          "Only an open dine-in order can be transferred.",
+        );
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM floor_tables WHERE id=CAST(${input.tableId} AS uuid) AND organization_id=CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
+      );
+      const target = await tx.floorTable.findFirst({
+        where: {
+          id: input.tableId,
+          organizationId: actor.organizationId,
+          branchId: order.branchId,
+          isActive: true,
+        },
+      });
+      if (!target) throw new NotFoundException("Target table not found.");
+      if (target.status !== "AVAILABLE")
+        throw new ConflictException("Target table is not available.");
+      if (input.waiterId) {
+        const waiter = await tx.user.findFirst({
+          where: {
+            id: input.waiterId,
+            organizationId: actor.organizationId,
+            status: "ACTIVE",
+            branchMemberships: { some: { branchId: order.branchId } },
+          },
+        });
+        if (!waiter)
+          throw new BadRequestException(
+            "Target waiter is not assigned to this branch.",
+          );
+      }
+      const updated = await tx.posOrder.update({
+        where: { id: order.id },
+        data: {
+          tableId: target.id,
+          createdById: input.waiterId ?? order.createdById,
+          version: { increment: 1 },
+        },
+      });
+      await tx.floorTable.update({
+        where: { id: target.id },
+        data: { status: "OCCUPIED" },
+      });
+      if (order.tableId)
+        await tx.floorTable.update({
+          where: { id: order.tableId },
+          data: { status: "AVAILABLE" },
+        });
+      await this.audit.create(
+        {
+          organizationId: actor.organizationId,
+          userId: actor.userId,
+          actorType: "USER",
+          actorId: actor.userId,
+          action: "dinein.order.transferred",
+          entityType: "PosOrder",
+          entityId: order.id,
+          branchId: order.branchId,
+          beforeValue: { tableId: order.tableId, waiterId: order.createdById },
+          afterValue: { tableId: target.id, waiterId: updated.createdById },
+          ...meta,
+        },
+        tx,
+      );
+      const result = { order: updated };
+      await tx.idempotencyKey.update({
+        where: {
+          organizationId_key_operation: {
+            organizationId: actor.organizationId,
+            key,
+            operation: "phase4.dinein.transfer",
+          },
+        },
+        data: { responseCode: 201, responseBody: result as any },
+      });
+      return result;
     });
   }
   async waiterOrders(actor: Actor, branchId: string) {

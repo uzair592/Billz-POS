@@ -19,6 +19,7 @@ run("Phase 4 dine-in acceptance", () => {
   let branchId = "";
   let productId = "";
   let tableId = "";
+  let transferTableId = "";
   let stationId = "";
   let registerId = "";
   const suffix = randomUUID().slice(0, 8);
@@ -108,6 +109,13 @@ run("Phase 4 dine-in acceptance", () => {
         .send({ branchId, name: "T1", capacity: 2 })
         .expect(201)
     ).body.id;
+    transferTableId = (
+      await owner
+        .post("/api/v1/phase4/tables")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, name: "T2", capacity: 4 })
+        .expect(201)
+    ).body.id;
     stationId = (
       await owner
         .post("/api/v1/phase4/stations")
@@ -172,6 +180,16 @@ run("Phase 4 dine-in acceptance", () => {
     const order = await db.posOrder.findFirstOrThrow({
       where: { organizationId: orgId, orderType: "DINE_IN" },
     });
+    await owner
+      .post(`/api/v1/phase4/dine-in/orders/${order.id}/transfer`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ tableId: transferTableId })
+      .expect(201);
+    expect(
+      (await db.floorTable.findUniqueOrThrow({ where: { id: tableId } }))
+        .status,
+    ).toBe("AVAILABLE");
     const result = await owner
       .post(`/api/v1/phase4/dine-in/orders/${order.id}/settle`)
       .set("x-csrf-token", csrf)
