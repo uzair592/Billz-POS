@@ -4,6 +4,8 @@ import { createOrganizationSchema } from "@cafe-pos/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, CircleDollarSign, LogOut, Plus, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { BillingMetrics } from "../../components/billing-metrics";
 import { useEffect, useState } from "react";
 import { Button, Card, Input, Notice } from "../../components/ui";
 import { ApiError, api } from "../../lib/api";
@@ -42,6 +44,10 @@ const emptyForm = {
   ownerUsername: "",
   temporaryPassword: "",
   planId: "",
+  initialBranchName: "Main Branch",
+  timezone: "Asia/Karachi",
+  currencyCode: "PKR",
+  graceDays: 0,
   moduleIds: [] as string[],
 };
 type FormField = keyof typeof emptyForm;
@@ -50,14 +56,32 @@ type FieldErrors = Partial<Record<FormField, string>>;
 export default function PlatformPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [planFilter, setPlanFilter] = useState("");
+  const [renewalBefore, setRenewalBefore] = useState("");
+  const [dueOnly, setDueOnly] = useState(false);
+  const [cursor, setCursor] = useState<string | undefined>();
   const stats = useQuery({
     queryKey: ["platform-stats"],
     queryFn: () => api<Dashboard>("/platform/dashboard", {}, true),
   });
   const organizations = useQuery({
-    queryKey: ["platform-organizations"],
+    queryKey: [
+      "platform-organizations",
+      search,
+      statusFilter,
+      planFilter,
+      renewalBefore,
+      dueOnly,
+      cursor,
+    ],
     queryFn: () =>
-      api<{ items: Organization[] }>("/platform/organizations", {}, true),
+      api<{ items: Organization[]; nextCursor: string | null }>(
+        `/platform/organizations?search=${encodeURIComponent(search)}&status=${statusFilter}&planName=${encodeURIComponent(planFilter)}&renewalBefore=${renewalBefore}&dueOnly=${dueOnly}${cursor ? "&cursor=" + cursor : ""}`,
+        {},
+        true,
+      ),
   });
   const catalog = useQuery({
     queryKey: ["platform-catalog"],
@@ -149,6 +173,7 @@ export default function PlatformPage() {
       <header className="topbar">
         <div className="page-title">
           <h1>Platform overview</h1>
+          <Link href="/platform/plans">Plans & prices</Link>
           <p>Business accounts, plans, users, and device allowances</p>
         </div>
         <div className="topbar-actions">
@@ -318,6 +343,44 @@ export default function PlatformPage() {
                 </label>
               ))}
             </fieldset>
+            <div className="form-grid">
+              <Input
+                label="Initial branch name"
+                value={form.initialBranchName}
+                onChange={(e) =>
+                  setForm({ ...form, initialBranchName: e.target.value })
+                }
+                error={fieldErrors.initialBranchName}
+              />
+              <Input
+                label="Timezone"
+                value={form.timezone}
+                onChange={(e) => setForm({ ...form, timezone: e.target.value })}
+                error={fieldErrors.timezone}
+              />
+              <Input
+                label="Currency"
+                value={form.currencyCode}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    currencyCode: e.target.value.toUpperCase(),
+                  })
+                }
+                error={fieldErrors.currencyCode}
+              />
+              <Input
+                label="Grace days"
+                type="number"
+                min={0}
+                max={90}
+                value={form.graceDays}
+                onChange={(e) =>
+                  setForm({ ...form, graceDays: Number(e.target.value) })
+                }
+                error={fieldErrors.graceDays}
+              />
+            </div>
             <div className="actions">
               <Button
                 type="button"
@@ -334,8 +397,66 @@ export default function PlatformPage() {
         </Card>
       )}
       <Card>
+        <BillingMetrics />
         <h2>Businesses</h2>
+        <div className="billing-form">
+          <Input
+            label="Plan name"
+            value={planFilter}
+            onChange={(e) => {
+              setPlanFilter(e.target.value);
+              setCursor(undefined);
+            }}
+          />
+          <Input
+            label="Renewal on or before"
+            type="date"
+            value={renewalBefore}
+            onChange={(e) => {
+              setRenewalBefore(e.target.value);
+              setCursor(undefined);
+            }}
+          />
+          <label>
+            <input
+              type="checkbox"
+              checked={dueOnly}
+              onChange={(e) => {
+                setDueOnly(e.target.checked);
+                setCursor(undefined);
+              }}
+            />{" "}
+            Outstanding invoices only
+          </label>
+          <Input
+            label="Search businesses"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <label className="field">
+            <span>Status</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              <option value="">All statuses</option>
+              <option>ACTIVE</option>
+              <option>SUSPENDED</option>
+              <option>DEACTIVATED</option>
+            </select>
+          </label>
+        </div>
         {organizations.error && <Notice>{organizations.error.message}</Notice>}
+        <div className="actions">
+          {cursor && (
+            <Button onClick={() => setCursor(undefined)}>First page</Button>
+          )}
+          {organizations.data?.nextCursor && (
+            <Button onClick={() => setCursor(organizations.data!.nextCursor!)}>
+              Next page
+            </Button>
+          )}
+        </div>
         <div className="table-wrap desktop-table">
           <table className="data-table">
             <thead>
@@ -352,7 +473,9 @@ export default function PlatformPage() {
               {organizations.data?.items.map((item) => (
                 <tr key={item.id}>
                   <td>
-                    <strong>{item.name}</strong>
+                    <Link href={`/platform/organizations/${item.id}`}>
+                      <strong>{item.name}</strong>
+                    </Link>
                   </td>
                   <td>{item.status}</td>
                   <td>{item.subscriptions[0]?.plan.name ?? "—"}</td>
@@ -368,7 +491,9 @@ export default function PlatformPage() {
           {organizations.data?.items.map((item) => (
             <article className="mobile-list-item" key={item.id}>
               <div>
-                <strong>{item.name}</strong>
+                <Link href={`/platform/organizations/${item.id}`}>
+                  <strong>{item.name}</strong>
+                </Link>
                 <span>
                   {item.status} ·{" "}
                   {item.subscriptions[0]?.plan.name ?? "No plan"}

@@ -39,6 +39,8 @@ const modules = [
 ] as const;
 
 async function main() {
+  if (process.env.NODE_ENV === "production")
+    throw new Error("Development seeds are disabled in production.");
   for (const [key, name, phase] of modules) {
     await prisma.module.upsert({
       where: { key },
@@ -73,11 +75,32 @@ async function main() {
       maxDevices: 5,
     },
     { code: "pro", name: "Pro", maxBranches: 10, maxUsers: 75, maxDevices: 10 },
+    {
+      code: "demo-one-device",
+      name: "Demo: 1 device (unpriced)",
+      maxBranches: 1,
+      maxUsers: 5,
+      maxDevices: 1,
+    },
+    {
+      code: "demo-two-devices",
+      name: "Demo: 2 devices (unpriced)",
+      maxBranches: 1,
+      maxUsers: 5,
+      maxDevices: 2,
+    },
+    {
+      code: "demo-three-devices",
+      name: "Demo: 3 devices (unpriced)",
+      maxBranches: 1,
+      maxUsers: 5,
+      maxDevices: 3,
+    },
   ];
   for (const definition of planDefinitions) {
     const plan = await prisma.subscriptionPlan.upsert({
       where: { code: definition.code },
-      update: { ...definition, isActive: true },
+      update: {},
       create: definition,
     });
     await prisma.planModule.upsert({

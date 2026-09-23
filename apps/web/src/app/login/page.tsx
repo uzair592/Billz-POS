@@ -23,11 +23,15 @@ export default function LoginPage() {
     try {
       const result = await api<{
         csrfToken: string;
-        user: { mustChangePassword: boolean };
+        user: { mustChangePassword: boolean; restricted: boolean };
       }>("/auth/login", { method: "POST", body: JSON.stringify(values) });
       saveCsrf(result.csrfToken);
       router.push(
-        result.user.mustChangePassword ? "/change-password" : "/workspace",
+        result.user.mustChangePassword
+          ? "/change-password"
+          : result.user.restricted
+            ? "/workspace/billing"
+            : "/workspace",
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Sign in failed.");

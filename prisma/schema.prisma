@@ -87,6 +87,7 @@ model SubscriptionPlan {
   updatedAt     DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
   modules       PlanModule[]
   subscriptions OrganizationSubscription[]
+  billingVersions BillingPlanVersion[]
 
   @@map("subscription_plans")
 }
@@ -124,6 +125,7 @@ model Organization {
   phone                 String?                    @db.VarChar(50)
   logoUrl               String?                    @map("logo_url") @db.VarChar(1000)
   status                OrganizationStatus         @default(ACTIVE)
+  statusExpiresAt       DateTime?                   @map("status_expires_at") @db.Timestamptz(3)
   onboardingStep        Int                        @default(0) @map("onboarding_step")
   onboardingCompletedAt DateTime?                  @map("onboarding_completed_at") @db.Timestamptz(3)
   createdAt             DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -144,6 +146,7 @@ model Organization {
   idempotencyKeys       IdempotencyKey[]
   files                 FileAsset[]
   devices               OrganizationDevice[]
+  billingInvoices       BillingInvoice[]
 
   @@map("organizations")
 }
@@ -155,6 +158,7 @@ model OrganizationSubscription {
   status         SubscriptionStatus @default(TRIALING)
   startsAt       DateTime           @map("starts_at") @db.Timestamptz(3)
   endsAt         DateTime?          @map("ends_at") @db.Timestamptz(3)
+  graceEndsAt    DateTime?          @map("grace_ends_at") @db.Timestamptz(3)
   createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
   organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
@@ -162,6 +166,79 @@ model OrganizationSubscription {
 
   @@index([organizationId, status])
   @@map("organization_subscriptions")
+}
+
+model BillingPlanVersion {
+  id           String   @id @default(uuid()) @db.Uuid
+  planId       String   @map("plan_id") @db.Uuid
+  name         String   @db.VarChar(100)
+  currency     String   @db.Char(3)
+  monthlyMinor Int      @map("monthly_minor")
+  maxBranches  Int      @map("max_branches")
+  maxUsers     Int      @map("max_users")
+  maxDevices   Int      @map("max_devices")
+  graceDays    Int      @map("grace_days")
+  moduleIds    String[] @default([]) @map("module_ids") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  plan         SubscriptionPlan @relation(fields:[planId],references:[id],onDelete:Restrict)
+  invoices     BillingInvoice[]
+  @@index([planId, createdAt])
+  @@map("billing_plan_versions")
+}
+
+model BillingInvoice {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  planVersionId  String   @map("plan_version_id") @db.Uuid
+  commandId      String   @map("command_id") @db.Uuid
+  requestHash    String   @map("request_hash") @db.Char(64)
+  description    String
+  currency       String   @db.Char(3)
+  totalMinor     Int      @map("total_minor")
+  periodStart    DateTime @map("period_start") @db.Timestamptz(3)
+  periodEnd      DateTime @map("period_end") @db.Timestamptz(3)
+  graceEndsAt    DateTime @map("grace_ends_at") @db.Timestamptz(3)
+  anchorDay      Int      @map("anchor_day")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  settlements    BillingSettlement[]
+  organization   Organization @relation(fields:[organizationId],references:[id],onDelete:Restrict)
+  planVersion    BillingPlanVersion @relation(fields:[planVersionId],references:[id],onDelete:Restrict)
+  attachments    BillingAttachment[]
+  @@unique([organizationId, commandId])
+  @@unique([id, organizationId])
+  @@index([organizationId, createdAt])
+  @@map("billing_invoices")
+}
+
+model BillingSettlement {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  invoiceId      String   @map("invoice_id") @db.Uuid
+  commandId      String   @map("command_id") @db.Uuid
+  requestHash    String   @map("request_hash") @db.Char(64)
+  kind           String   @db.VarChar(20)
+  amountMinor    Int      @map("amount_minor")
+  method         String   @db.VarChar(30)
+  reference      String   @db.VarChar(200)
+  reason         String
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  invoice        BillingInvoice @relation(fields: [invoiceId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  @@unique([organizationId, commandId])
+  @@index([organizationId, invoiceId])
+  @@map("billing_settlements")
+}
+
+model BillingAttachment {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  invoiceId      String   @map("invoice_id") @db.Uuid
+  name           String   @db.VarChar(150)
+  mimeType       String   @map("mime_type") @db.VarChar(40)
+  content        Bytes
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  invoice        BillingInvoice @relation(fields:[invoiceId,organizationId],references:[id,organizationId],onDelete:Restrict)
+  @@index([organizationId, invoiceId])
+  @@map("billing_attachments")
 }
 
 model OrganizationModule {
@@ -210,6 +287,7 @@ model User {
   pinHash             String?              @map("pin_hash")
   status              UserStatus           @default(ACTIVE)
   mustChangePassword  Boolean              @default(true) @map("must_change_password")
+  temporaryPasswordExpiresAt DateTime?     @map("temporary_password_expires_at") @db.Timestamptz(3)
   failedLoginCount    Int                  @default(0) @map("failed_login_count")
   lockedUntil         DateTime?            @map("locked_until") @db.Timestamptz(3)
   lastLoginAt         DateTime?            @map("last_login_at") @db.Timestamptz(3)

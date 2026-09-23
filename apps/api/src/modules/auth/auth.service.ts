@@ -15,6 +15,7 @@ import {
 } from "../../common/security";
 import { MailService } from "./mail.service";
 import { RateLimitService } from "./rate-limit.service";
+import { entitlement, effectiveOrganizationStatus } from "./entitlement";
 
 interface Metadata {
   ipAddress?: string;
@@ -65,51 +66,61 @@ export class AuthService {
         code: "RATE_LIMITED",
         message: "Too many sign-in attempts. Try again later.",
       });
-    const user = await this.prisma.user.findFirst({
-      where: {
-        OR: [
-          { username: { equals: input.identifier, mode: "insensitive" } },
-          { email: { equals: input.identifier, mode: "insensitive" } },
-        ],
-      },
-      select: {
-        id: true,
-        organizationId: true,
-        name: true,
-        passwordHash: true,
-        status: true,
-        mustChangePassword: true,
-        lockedUntil: true,
-        failedLoginCount: true,
-        organization: {
-          select: {
-            slug: true,
-            status: true,
-            subscriptions: {
-              where: { status: { in: ["ACTIVE", "TRIALING"] } },
-              orderBy: { createdAt: "desc" },
-              take: 1,
-              include: { plan: true },
+    const identity = await this.prisma.identity(input.identifier);
+    const user = identity
+      ? await this.prisma.withTenant(identity.organization_id, (tx) =>
+          tx.user.findFirst({
+            where: {
+              OR: [
+                { username: { equals: input.identifier, mode: "insensitive" } },
+                { email: { equals: input.identifier, mode: "insensitive" } },
+              ],
             },
-          },
-        },
-      },
-    });
+            select: {
+              id: true,
+              organizationId: true,
+              name: true,
+              passwordHash: true,
+              status: true,
+              mustChangePassword: true,
+              temporaryPasswordExpiresAt: true,
+              lockedUntil: true,
+              failedLoginCount: true,
+              roles: { select: { role: { select: { key: true } } } },
+              organization: {
+                select: {
+                  slug: true,
+                  status: true,
+                  statusExpiresAt: true,
+                  subscriptions: {
+                    orderBy: { createdAt: "desc" },
+                    take: 1,
+                    include: { plan: true },
+                  },
+                },
+              },
+            },
+          }),
+        )
+      : null;
     const passwordValid = user
       ? await verifyPassword(user.passwordHash, input.password)
       : false;
 
     if (!user || !passwordValid) {
-      await this.prisma.loginAttempt.create({
-        data: {
-          organizationId: user?.organizationId,
-          userId: user?.id,
-          identifier: input.identifier,
-          successful: false,
-          failureCode: "INVALID_CREDENTIALS",
-          ...metadata,
-        },
-      });
+      if (user)
+        await this.prisma.withTenant(user.organizationId, (tx) =>
+          tx.loginAttempt.create({
+            data: {
+              organizationId: user?.organizationId,
+              userId: user?.id,
+              identifier: input.identifier,
+              successful: false,
+              failureCode: "INVALID_CREDENTIALS",
+              ...metadata,
+            },
+          }),
+        );
       if (user)
         await this.prisma.withTenant(user.organizationId, (tx) =>
           tx.user.update({
@@ -128,10 +139,25 @@ export class AuthService {
         message: "Invalid sign-in details.",
       });
     }
-    if (user.organization.status !== "ACTIVE")
+    const access = entitlement(
+      effectiveOrganizationStatus(user.organization),
+      user.organization.subscriptions[0],
+    );
+    if (
+      user.mustChangePassword &&
+      user.temporaryPasswordExpiresAt &&
+      user.temporaryPasswordExpiresAt <= new Date()
+    )
+      throw new ForbiddenException({
+        code: "ACTIVATION_EXPIRED",
+        message:
+          "Your temporary password has expired. Use Forgot password or contact platform support.",
+      });
+    const isOwner = user.roles.some(({ role }) => role.key === "owner");
+    if (!access.allowed && !isOwner)
       throw new ForbiddenException({
         code: "ORGANIZATION_SUSPENDED",
-        message: "This business account is not active.",
+        message: "Business access is restricted. Contact your owner.",
       });
     if (
       user.status !== "ACTIVE" ||
@@ -142,14 +168,6 @@ export class AuthService {
         message: "This account is temporarily unavailable.",
       });
     const subscription = user.organization.subscriptions[0];
-    if (
-      !subscription ||
-      (subscription.endsAt && subscription.endsAt <= new Date())
-    )
-      throw new ForbiddenException({
-        code: "SUBSCRIPTION_EXPIRED",
-        message: "This business subscription is not active.",
-      });
 
     const token = createSecret();
     const csrfToken = createSecret();
@@ -166,6 +184,18 @@ export class AuthService {
     const session = await this.prisma.withTenant(
       user.organizationId,
       async (tx) => {
+        if (!access.allowed) {
+          return tx.session.create({
+            data: {
+              organizationId: user.organizationId,
+              userId: user.id,
+              tokenHash: sha256(token),
+              csrfHash: sha256(csrfToken),
+              expiresAt,
+              ...metadata,
+            },
+          });
+        }
         let device = await tx.organizationDevice.findUnique({
           where: {
             organizationId_deviceHash: {
@@ -178,10 +208,10 @@ export class AuthService {
           const registeredDevices = await tx.organizationDevice.count({
             where: { organizationId: user.organizationId, revokedAt: null },
           });
-          if (registeredDevices >= subscription.plan.maxDevices) {
+          if (registeredDevices >= (subscription?.plan.maxDevices ?? 0)) {
             throw new ForbiddenException({
               code: "DEVICE_LIMIT_REACHED",
-              message: `This plan allows ${subscription.plan.maxDevices} devices. Remove an old device before signing in on a new one.`,
+              message: `This plan allows ${subscription?.plan.maxDevices ?? 0} devices. Remove an old device before signing in on a new one.`,
             });
           }
           device = device
@@ -279,15 +309,18 @@ export class AuthService {
         id: user.id,
         name: user.name,
         mustChangePassword: user.mustChangePassword,
+        restricted: !access.allowed,
       },
     };
   }
 
-  async logout(sessionId: string) {
-    await this.prisma.session.updateMany({
-      where: { id: sessionId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+  async logout(sessionId: string, organizationId: string) {
+    await this.prisma.withTenant(organizationId, (tx) =>
+      tx.session.updateMany({
+        where: { id: sessionId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    );
   }
 
   async changePassword(
@@ -307,10 +340,18 @@ export class AuthService {
       });
     const passwordHash = await hashPassword(newPassword);
     await this.prisma.withTenant(organizationId, async (tx) => {
-      await tx.user.update({
-        where: { id: userId },
-        data: { passwordHash, mustChangePassword: false },
+      const changed = await tx.user.updateMany({
+        where: { id: userId, passwordHash: user.passwordHash },
+        data: {
+          passwordHash,
+          mustChangePassword: false,
+          temporaryPasswordExpiresAt: null,
+        },
       });
+      if (changed.count !== 1)
+        throw new UnauthorizedException(
+          "Password was already changed. Sign in again.",
+        );
       await tx.session.updateMany({
         where: { userId, id: { not: undefined } },
         data: { revokedAt: new Date() },
@@ -340,16 +381,21 @@ export class AuthService {
       ))
     )
       return;
-    const user = await this.prisma.user.findFirst({
-      where: {
-        OR: [
-          { username: { equals: identifier, mode: "insensitive" } },
-          { email: { equals: identifier, mode: "insensitive" } },
-        ],
-        status: "ACTIVE",
-      },
-      select: { id: true, organizationId: true, email: true },
-    });
+    const identity = await this.prisma.identity(identifier);
+    const user = identity
+      ? await this.prisma.withTenant(identity.organization_id, (tx) =>
+          tx.user.findFirst({
+            where: {
+              OR: [
+                { username: { equals: identifier, mode: "insensitive" } },
+                { email: { equals: identifier, mode: "insensitive" } },
+              ],
+              status: "ACTIVE",
+            },
+            select: { id: true, organizationId: true, email: true },
+          }),
+        )
+      : null;
     if (!user?.email) return;
     const token = createSecret();
     await this.prisma.withTenant(user.organizationId, async (tx) => {
@@ -383,14 +429,7 @@ export class AuthService {
   }
 
   async resetPassword(token: string, newPassword: string, metadata: Metadata) {
-    const reset = await this.prisma.passwordResetToken.findFirst({
-      where: {
-        tokenHash: sha256(token),
-        usedAt: null,
-        expiresAt: { gt: new Date() },
-      },
-      select: { id: true, organizationId: true, userId: true },
-    });
+    const reset = await this.prisma.resetByToken(sha256(token));
     if (!reset)
       throw new UnauthorizedException({
         code: "RESET_TOKEN_INVALID",
@@ -398,15 +437,20 @@ export class AuthService {
       });
     const passwordHash = await hashPassword(newPassword);
     await this.prisma.withTenant(reset.organizationId, async (tx) => {
-      await tx.passwordResetToken.update({
-        where: { id: reset.id },
+      const consumed = await tx.passwordResetToken.updateMany({
+        where: { id: reset.id, usedAt: null, expiresAt: { gt: new Date() } },
         data: { usedAt: new Date() },
       });
+      if (consumed.count !== 1)
+        throw new UnauthorizedException(
+          "This reset link has already been used or expired.",
+        );
       await tx.user.update({
         where: { id: reset.userId },
         data: {
           passwordHash,
           mustChangePassword: false,
+          temporaryPasswordExpiresAt: null,
           failedLoginCount: 0,
           lockedUntil: null,
         },

@@ -1,5 +1,10 @@
 # Changelog
 
+## Phase 1 billing and entitlement foundation
+- Add versioned subscription prices, plan limits/module snapshots, invoices, manual payments, credits, receipts and private evidence attachments.
+- Add request-time subscription/grace/suspension checks, timed suspension, scheduler reconciliation, owner restricted billing and activation/recovery controls.
+- Add non-owner runtime/platform database credentials, narrow auth lookup functions, CI, isolated HTTP/database acceptance tests and responsive billing screens.
+
 ## Phase 0 specification baseline
 - Preserve supplied master specification and supplementary brief.
 - Assess existing TypeScript/NestJS/Next.js/Prisma foundation against new phases.

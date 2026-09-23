@@ -1,6 +1,9 @@
-import { Injectable } from '@nestjs/common';
-import { AuditActorType, Prisma } from '@prisma/client';
-import { PrismaService, TransactionClient } from '../../database/prisma.service';
+import { Injectable } from "@nestjs/common";
+import { AuditActorType, Prisma } from "@prisma/client";
+import {
+  PrismaService,
+  TransactionClient,
+} from "../../database/prisma.service";
 
 export interface AuditEvent {
   organizationId?: string;
@@ -22,7 +25,16 @@ export interface AuditEvent {
 export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 
-  create(event: AuditEvent, tx: TransactionClient | PrismaService = this.prisma) {
-    return tx.auditLog.create({ data: event });
+  create(event: AuditEvent, tx?: TransactionClient | PrismaService) {
+    if (tx) return tx.auditLog.create({ data: event });
+    if (event.actorType === "PLATFORM_ADMIN" && event.actorId)
+      return this.prisma.withPlatform(event.actorId, (client) =>
+        client.auditLog.create({ data: event }),
+      );
+    if (event.organizationId)
+      return this.prisma.withTenant(event.organizationId, (client) =>
+        client.auditLog.create({ data: event }),
+      );
+    throw new Error("Audit events require an explicit authorized transaction.");
   }
 }

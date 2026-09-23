@@ -71,6 +71,24 @@ export const createOrganizationSchema = z.object({
   temporaryPassword: passwordSchema,
   planId: z.string().uuid("Select a subscription plan"),
   subscriptionEndsAt: z.string().datetime().optional(),
+  subscriptionStartsAt: z.string().datetime().optional(),
+  graceDays: z.number().int().min(0).max(90).default(0),
+  initialBranchName: z.string().trim().min(2).max(150).default("Main Branch"),
+  timezone: z
+    .string()
+    .refine((value) => {
+      try {
+        new Intl.DateTimeFormat("en", { timeZone: value });
+        return true;
+      } catch {
+        return false;
+      }
+    }, "Enter a valid timezone")
+    .default("Asia/Karachi"),
+  currencyCode: z
+    .string()
+    .regex(/^[A-Z]{3}$/)
+    .default("PKR"),
   moduleIds: z.array(z.string().uuid()).default([]),
 });
 

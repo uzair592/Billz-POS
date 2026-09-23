@@ -1,5 +1,16 @@
 # Requirements matrix — Phase 0
 
+## Phase 1 evidence update — 2026-09-23
+
+The Phase 0 baseline below is retained for traceability. Phase 1 implementation files and executed gates are recorded in [PHASE_1_REPORT.md](PHASE_1_REPORT.md).
+
+| Requirement group | Phase 1 status | Evidence |
+| --- | --- | --- |
+| ISO-01 | PASS for platform, billing, runtime DB and private attachments | `apps/api/test/phase-1.e2e-spec.ts`; `prisma/migrations/20260923000200_runtime_boundaries` and `20260923000400_billing_attachments` |
+| SUB-01 | PASS for invoice payment, grace expiry, live-session restriction/reactivation and timed suspension | `apps/api/test/phase-1.e2e-spec.ts`; `apps/api/src/modules/auth/entitlement.ts`; `billing.scheduler.ts` |
+| AUTH/FILE/AUD/PLAT/BILL | IMPLEMENTED with documented limitations | `apps/api/src/modules/platform/billing*`; `apps/web/src/components/billing*`; migrations `20260923000100`–`20260923000600` |
+| DEV-01/IAM-01 | PLANNED Phase 2 | Atomic leases, heartbeat, custom delegation and approval thresholds remain outside this phase |
+
 MASTER_SPEC.md is governing. Source references below use its preserved line numbers. Each source clause has an individual stable ID; grouped acceptance criteria must be expanded into executable cases during its owning phase. DESIGNED means documented only; PARTIAL means reusable code with unmet gate; PLANNED is future scope, not a current defect. No operational gate is marked PASS based on compilation.
 
 ## Phase 0 deliverables

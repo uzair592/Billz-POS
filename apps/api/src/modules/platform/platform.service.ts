@@ -17,6 +17,7 @@ import {
 import { PrismaService } from "../../database/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { RateLimitService } from "../auth/rate-limit.service";
+import { nextMonth } from "./billing.rules";
 
 interface Metadata {
   ipAddress?: string;
@@ -37,6 +38,7 @@ const DEFAULT_ROLES: Record<string, string[]> = {
   waiter: ["organization.view"],
   kitchen_staff: ["organization.view"],
   inventory_manager: ["organization.view"],
+  accountant: ["organization.view"],
 };
 
 @Injectable()
@@ -61,7 +63,7 @@ export class PlatformService {
         message: "Too many sign-in attempts. Try again later.",
       });
     }
-    const admin = await this.prisma.platformAdmin.findUnique({
+    const admin = await this.prisma.platform.platformAdmin.findUnique({
       where: { email: email.toLowerCase() },
     });
     if (
@@ -79,7 +81,7 @@ export class PlatformService {
     const expiresAt = new Date(
       Date.now() + this.config.get<number>("SESSION_TTL_HOURS", 12) * 3_600_000,
     );
-    const session = await this.prisma.platformSession.create({
+    const session = await this.prisma.platform.platformSession.create({
       data: {
         platformAdminId: admin.id,
         tokenHash: sha256(token),
@@ -88,7 +90,7 @@ export class PlatformService {
         ...metadata,
       },
     });
-    await this.prisma.platformAdmin.update({
+    await this.prisma.platform.platformAdmin.update({
       where: { id: admin.id },
       data: { lastLoginAt: new Date() },
     });
@@ -109,7 +111,7 @@ export class PlatformService {
   }
 
   async logout(sessionId: string) {
-    await this.prisma.platformSession.updateMany({
+    await this.prisma.platform.platformSession.updateMany({
       where: { id: sessionId },
       data: { revokedAt: new Date() },
     });
@@ -146,11 +148,11 @@ export class PlatformService {
 
   async catalog() {
     const [plans, modules] = await Promise.all([
-      this.prisma.subscriptionPlan.findMany({
+      this.prisma.platform.subscriptionPlan.findMany({
         where: { isActive: true },
         orderBy: { name: "asc" },
       }),
-      this.prisma.module.findMany({
+      this.prisma.platform.module.findMany({
         where: { isActive: true, phase: 1 },
         orderBy: { name: "asc" },
       }),
@@ -158,11 +160,50 @@ export class PlatformService {
     return { plans, modules };
   }
 
-  listOrganizations(platformAdminId: string, cursor?: string, take = 25) {
+  listOrganizations(
+    platformAdminId: string,
+    cursor?: string,
+    take = 25,
+    search = "",
+    status?: "ACTIVE" | "SUSPENDED" | "DEACTIVATED",
+    filters: {
+      planName?: string;
+      renewalBefore?: string;
+      dueOnly?: boolean;
+    } = {},
+  ) {
     const size = Math.min(Math.max(take, 1), 100);
     return this.prisma
-      .withPlatform(platformAdminId, (tx) =>
-        tx.organization.findMany({
+      .withPlatform(platformAdminId, async (tx) => {
+        const dueIds = filters.dueOnly
+          ? await tx.$queryRaw<
+              { organization_id: string }[]
+            >`SELECT DISTINCT i.organization_id FROM billing_invoices i WHERE i.total_minor > COALESCE((SELECT SUM(s.amount_minor) FROM billing_settlements s WHERE s.invoice_id=i.id),0)`
+          : undefined;
+        return tx.organization.findMany({
+          where: {
+            name: { contains: search, mode: "insensitive" },
+            status,
+            id: dueIds
+              ? { in: dueIds.map((row) => row.organization_id) }
+              : undefined,
+            subscriptions:
+              filters.planName || filters.renewalBefore
+                ? {
+                    some: {
+                      status: {
+                        in: ["ACTIVE", "TRIALING", "PAST_DUE", "EXPIRED"],
+                      },
+                      plan: filters.planName
+                        ? { name: filters.planName }
+                        : undefined,
+                      endsAt: filters.renewalBefore
+                        ? { lte: new Date(filters.renewalBefore) }
+                        : undefined,
+                    },
+                  }
+                : undefined,
+          },
           take: size + 1,
           skip: cursor ? 1 : 0,
           cursor: cursor ? { id: cursor } : undefined,
@@ -175,8 +216,8 @@ export class PlatformService {
               include: { plan: true },
             },
           },
-        }),
-      )
+        });
+      })
       .then((rows) => ({
         items: rows.slice(0, size),
         nextCursor: rows.length > size ? rows[size - 1]?.id : null,
@@ -195,6 +236,15 @@ export class PlatformService {
           modules: { include: { module: true } },
           _count: { select: { branches: true, users: true } },
           supportNotes: { orderBy: { createdAt: "desc" } },
+          branches: { select: { id: true, name: true, isActive: true } },
+          users: {
+            where: { roles: { some: { role: { key: "owner" } } } },
+            select: { name: true, email: true, phone: true },
+          },
+          devices: {
+            where: { revokedAt: null },
+            select: { id: true, displayName: true, lastSeenAt: true },
+          },
         },
       }),
     );
@@ -208,6 +258,48 @@ export class PlatformService {
         take: 100,
       }),
     );
+  }
+
+  async recoveryLink(
+    platformAdminId: string,
+    organizationId: string,
+    reason: string,
+  ) {
+    const token = createSecret();
+    await this.prisma.withPlatform(platformAdminId, async (tx) => {
+      const owner = await tx.user.findFirst({
+        where: { organizationId, roles: { some: { role: { key: "owner" } } } },
+      });
+      if (!owner) throw new NotFoundException("Owner not found.");
+      await tx.passwordResetToken.updateMany({
+        where: { userId: owner.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      await tx.passwordResetToken.create({
+        data: {
+          organizationId,
+          userId: owner.id,
+          tokenHash: sha256(token),
+          expiresAt: new Date(Date.now() + 30 * 60000),
+        },
+      });
+      await this.audit.create(
+        {
+          organizationId,
+          actorType: "PLATFORM_ADMIN",
+          actorId: platformAdminId,
+          action: "owner.recovery_link_issued",
+          entityType: "User",
+          entityId: owner.id,
+          reason,
+        },
+        tx,
+      );
+    });
+    return {
+      url: `${this.config.get("WEB_URL", "http://localhost:3000")}/reset-password?token=${encodeURIComponent(token)}`,
+      expiresInMinutes: 30,
+    };
   }
 
   async resetOwnerPassword(
@@ -232,6 +324,7 @@ export class PlatformService {
         data: {
           passwordHash,
           mustChangePassword: true,
+          temporaryPasswordExpiresAt: new Date(Date.now() + 48 * 3600000),
           failedLoginCount: 0,
           lockedUntil: null,
         },
@@ -305,8 +398,14 @@ export class PlatformService {
     planId: string,
     endsAt: string | undefined,
     metadata: Metadata,
+    reason: string,
   ) {
+    if (!endsAt || new Date(endsAt) <= new Date())
+      throw new BadRequestException(
+        "A future expiry is required for a manual subscription exception.",
+      );
     return this.prisma.withPlatform(platformAdminId, async (tx) => {
+      await tx.$queryRaw`SELECT id FROM organizations WHERE id=${organizationId}::uuid FOR UPDATE`;
       const plan = await tx.subscriptionPlan.findFirst({
         where: { id: planId, isActive: true },
       });
@@ -334,6 +433,7 @@ export class PlatformService {
           actorType: "PLATFORM_ADMIN",
           actorId: platformAdminId,
           action: "organization.subscription_changed",
+          reason,
           entityType: "OrganizationSubscription",
           entityId: subscription.id,
           afterValue: { planId, endsAt: endsAt ?? null },
@@ -359,12 +459,12 @@ export class PlatformService {
         .slice(0, 60) || "business";
     const slug = `${derivedSlug}-${randomUUID().slice(0, 6)}`;
     const [plan, permissions, duplicateLogin] = await Promise.all([
-      this.prisma.subscriptionPlan.findUnique({
+      this.prisma.platform.subscriptionPlan.findUnique({
         where: { id: input.planId },
         include: { modules: { include: { module: true } } },
       }),
-      this.prisma.permission.findMany(),
-      this.prisma.user.findFirst({
+      this.prisma.platform.permission.findMany(),
+      this.prisma.platform.user.findFirst({
         where: {
           OR: [
             { username: { equals: input.ownerUsername, mode: "insensitive" } },
@@ -388,7 +488,7 @@ export class PlatformService {
     const selectedModuleIds = input.moduleIds.length
       ? input.moduleIds
       : plan.modules.map(({ moduleId }) => moduleId);
-    const modules = await this.prisma.module.findMany({
+    const modules = await this.prisma.platform.module.findMany({
       where: { id: { in: selectedModuleIds }, isActive: true },
     });
     if (modules.length !== selectedModuleIds.length)
@@ -397,10 +497,18 @@ export class PlatformService {
         message: "One or more modules are unavailable.",
       });
     const passwordHash = await hashPassword(input.temporaryPassword);
+    const startsAt = input.subscriptionStartsAt
+      ? new Date(input.subscriptionStartsAt)
+      : new Date();
+    const endsAt = input.subscriptionEndsAt
+      ? new Date(input.subscriptionEndsAt)
+      : nextMonth(startsAt);
+    if (endsAt <= startsAt)
+      throw new BadRequestException(
+        "Renewal date must be after the subscription start date.",
+      );
 
-    return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe("SET LOCAL ROLE cafe_pos_app");
-      await tx.$executeRaw`SELECT set_config('app.platform_admin_id', ${adminId}, true)`;
+    return this.prisma.withPlatform(adminId, async (tx) => {
       const organization = await tx.organization.create({
         data: {
           slug,
@@ -416,10 +524,9 @@ export class PlatformService {
           organizationId: organization.id,
           planId: plan.id,
           status: "ACTIVE",
-          startsAt: new Date(),
-          endsAt: input.subscriptionEndsAt
-            ? new Date(input.subscriptionEndsAt)
-            : null,
+          startsAt,
+          endsAt,
+          graceEndsAt: new Date(endsAt.getTime() + input.graceDays * 86400000),
         },
       });
       await tx.organizationModule.createMany({
@@ -429,7 +536,11 @@ export class PlatformService {
         })),
       });
       await tx.businessSetting.create({
-        data: { organizationId: organization.id },
+        data: {
+          organizationId: organization.id,
+          timezone: input.timezone,
+          currencyCode: input.currencyCode,
+        },
       });
       await tx.paymentMethod.createMany({
         data: [
@@ -517,6 +628,7 @@ export class PlatformService {
           name: input.ownerName,
           phone: input.phone,
           passwordHash,
+          temporaryPasswordExpiresAt: new Date(Date.now() + 48 * 3600000),
         },
       });
       await tx.userRole.create({
@@ -524,6 +636,26 @@ export class PlatformService {
           organizationId: organization.id,
           userId: owner.id,
           roleId: ownerRole.id,
+        },
+      });
+      const branch = await tx.branch.create({
+        data: {
+          organizationId: organization.id,
+          name: input.initialBranchName,
+          code: "MAIN",
+          isPrimary: true,
+          timezone: input.timezone,
+        },
+      });
+      await tx.branchSetting.create({
+        data: { organizationId: organization.id, branchId: branch.id },
+      });
+      await tx.branchMembership.create({
+        data: {
+          organizationId: organization.id,
+          userId: owner.id,
+          branchId: branch.id,
+          isDefault: true,
         },
       });
       await this.audit.create(
@@ -557,36 +689,47 @@ export class PlatformService {
     adminId: string,
     reason: string | undefined,
     metadata: Metadata,
+    expiresAt?: string,
   ) {
-    const current = await this.prisma.organization.findUnique({
-      where: { id },
-    });
-    if (!current)
-      throw new NotFoundException({
-        code: "NOT_FOUND",
-        message: "Business not found.",
+    if (!reason?.trim() || reason.trim().length < 3)
+      throw new BadRequestException("A reason is required.");
+    if (
+      expiresAt &&
+      (status !== "SUSPENDED" || new Date(expiresAt) <= new Date())
+    )
+      throw new BadRequestException("Suspension expiry must be a future date.");
+    return this.prisma.withPlatform(adminId, async (tx) => {
+      const current = await tx.organization.findUnique({
+        where: { id },
       });
-    const updated = await this.prisma.organization.update({
-      where: { id },
-      data: { status },
-    });
-    if (status !== "ACTIVE")
-      await this.prisma.session.updateMany({
-        where: { organizationId: id, revokedAt: null },
-        data: { revokedAt: new Date() },
+      if (!current)
+        throw new NotFoundException({
+          code: "NOT_FOUND",
+          message: "Business not found.",
+        });
+      const updated = await tx.organization.update({
+        where: { id },
+        data: {
+          status,
+          statusExpiresAt: expiresAt ? new Date(expiresAt) : null,
+        },
       });
-    await this.audit.create({
-      organizationId: id,
-      actorType: "PLATFORM_ADMIN",
-      actorId: adminId,
-      action: `organization.${status.toLowerCase()}`,
-      entityType: "Organization",
-      entityId: id,
-      beforeValue: { status: current.status },
-      afterValue: { status },
-      reason,
-      ...metadata,
+      await this.audit.create(
+        {
+          organizationId: id,
+          actorType: "PLATFORM_ADMIN",
+          actorId: adminId,
+          action: `organization.${status.toLowerCase()}`,
+          entityType: "Organization",
+          entityId: id,
+          beforeValue: { status: current.status },
+          afterValue: { status, expiresAt: expiresAt ?? null },
+          reason,
+          ...metadata,
+        },
+        tx,
+      );
+      return updated;
     });
-    return updated;
   }
 }

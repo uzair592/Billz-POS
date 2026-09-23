@@ -15,9 +15,15 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 
 const navigation = [
+  {
+    href: "/workspace/billing",
+    label: "Subscription & billing",
+    icon: ClipboardList,
+  },
   { href: "/workspace", label: "Overview", icon: Building2 },
   { href: "/workspace/branches", label: "Branches", icon: Building2 },
   { href: "/workspace/employees", label: "Employees", icon: Users },
@@ -30,6 +36,12 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const session = useQuery({
+    queryKey: ["workspace-session"],
+    queryFn: () =>
+      api<{ user: { isOwner: boolean; restricted: boolean } }>("/auth/session"),
+    refetchInterval: 30000,
+  });
 
   async function logout() {
     await api("/auth/logout", { method: "POST" }).catch(() => undefined);
@@ -39,20 +51,29 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
 
   const links = (
     <nav aria-label="Workspace navigation">
-      {navigation.map(({ href, label, icon: Icon }) => {
-        const active =
-          href === "/workspace" ? pathname === href : pathname.startsWith(href);
-        return (
-          <Link
-            key={href}
-            href={href}
-            className={active ? "active" : ""}
-            onClick={() => setOpen(false)}
-          >
-            <Icon size={18} /> {label}
-          </Link>
-        );
-      })}
+      {navigation
+        .filter(
+          (item) =>
+            (!session.data?.user.restricted ||
+              item.href === "/workspace/billing") &&
+            (item.href !== "/workspace/billing" || session.data?.user.isOwner),
+        )
+        .map(({ href, label, icon: Icon }) => {
+          const active =
+            href === "/workspace"
+              ? pathname === href
+              : pathname.startsWith(href);
+          return (
+            <Link
+              key={href}
+              href={href}
+              className={active ? "active" : ""}
+              onClick={() => setOpen(false)}
+            >
+              <Icon size={18} /> {label}
+            </Link>
+          );
+        })}
     </nav>
   );
 
