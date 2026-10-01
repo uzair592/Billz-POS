@@ -27,7 +27,21 @@ async function main() {
   };
   run(["pnpm", "--filter", "@cafe-pos/contracts", "build"]);
   run(["pnpm", "prisma", "migrate", "deploy"]);
-  run(["pnpm", "--filter", "@cafe-pos/api", "test:e2e"]);
+  if (env.ACCEPTANCE_TEST_PATH) {
+    run([
+      "pnpm",
+      "--filter",
+      "@cafe-pos/api",
+      "exec",
+      "jest",
+      "--config",
+      "test/jest-e2e.json",
+      "--runInBand",
+      env.ACCEPTANCE_TEST_PATH,
+    ]);
+  } else {
+    run(["pnpm", "--filter", "@cafe-pos/api", "test:e2e"]);
+  }
   console.log(`Acceptance database retained for inspection: ${database}`);
 }
 main().catch((error) => {

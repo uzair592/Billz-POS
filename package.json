@@ -8,6 +8,7 @@
     "dev": "corepack pnpm --pm-on-fail=ignore --parallel --filter @cafe-pos/api --filter @cafe-pos/web dev",
     "lint": "corepack pnpm --pm-on-fail=ignore -r lint",
     "test": "corepack pnpm --pm-on-fail=ignore -r test",
+    "test:phase4:browser": "node scripts/phase-4-browser.cjs",
     "typecheck": "corepack pnpm --pm-on-fail=ignore -r typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
