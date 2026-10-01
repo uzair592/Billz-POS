@@ -130,7 +130,10 @@ export class Phase4Service {
       await this.branch(tx, actor, branchId);
       return tx.serviceBooking.findMany({
         where: { organizationId: actor.organizationId, branchId },
-        include: { table: true },
+        include: {
+          table: true,
+          depositTransactions: { orderBy: { createdAt: "asc" } },
+        },
         orderBy: { startsAt: "asc" },
       });
     });
@@ -157,6 +160,10 @@ export class Phase4Service {
         });
         if (!table) throw new NotFoundException("Table not found.");
       }
+      if (input.kind === "DELIVERY" && !input.deliveryAddress)
+        throw new BadRequestException(
+          "A delivery booking requires a delivery address.",
+        );
       try {
         const booking = await tx.serviceBooking.create({
           data: {
@@ -174,6 +181,10 @@ export class Phase4Service {
             endsAt: new Date(input.endsAt),
             notes: input.notes,
             details: input.details ?? {},
+            deliveryAddress: input.deliveryAddress,
+            deliveryPhone: input.deliveryPhone,
+            deliveryFeeMinor: safeAmount(input.deliveryFeeMinor ?? 0),
+            courierName: input.courierName,
             depositMinor: safeAmount(input.depositMinor ?? 0),
           },
         });
@@ -215,6 +226,113 @@ export class Phase4Service {
       }
     });
   }
+  async recordDeposit(
+    actor: Actor,
+    bookingId: string,
+    input: any,
+    key: string,
+    meta: any,
+  ) {
+    return this.prisma.withTenant(actor.organizationId, async (tx) => {
+      const operation = `phase4.booking.deposit.${input.kind.toLowerCase()}`;
+      const prior = await this.idem(tx, actor, key, operation, {
+        bookingId,
+        ...input,
+      });
+      if (prior) return prior;
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM service_bookings WHERE id=CAST(${bookingId} AS uuid) AND organization_id=CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
+      );
+      const booking = await tx.serviceBooking.findFirst({
+        where: { id: bookingId, organizationId: actor.organizationId },
+      });
+      if (!booking) throw new NotFoundException("Booking not found.");
+      await this.branch(tx, actor, booking.branchId);
+      const knownStatuses = [
+        "CONFIRMED",
+        "WAITLISTED",
+        "SEATED",
+        "CANCELLED",
+        "COMPLETED",
+        "NO_SHOW",
+      ];
+      if (!knownStatuses.includes(booking.status))
+        throw new ConflictException(
+          "Booking status is not eligible for deposit activity.",
+        );
+      if (
+        input.kind === "COLLECTION" &&
+        !["CONFIRMED", "WAITLISTED"].includes(booking.status)
+      )
+        throw new ConflictException(
+          "Deposits may only be collected for an active booking.",
+        );
+      const payment = await this.pos.validateManualPayment(tx, actor, input);
+      const refundableMinor =
+        booking.collectedDepositMinor -
+        booking.refundedDepositMinor -
+        booking.appliedDepositMinor;
+      if (input.kind === "REFUND" && payment.amountMinor > refundableMinor)
+        throw new BadRequestException(
+          "Refund exceeds the unapplied collected deposit balance.",
+        );
+      await tx.bookingDepositTransaction.create({
+        data: {
+          organizationId: actor.organizationId,
+          bookingId,
+          kind: input.kind,
+          method: payment.method,
+          amountMinor: payment.amountMinor,
+          reference: input.reference,
+          createdById: actor.userId,
+        },
+      });
+      const updated = await tx.serviceBooking.update({
+        where: { id: bookingId },
+        data:
+          input.kind === "COLLECTION"
+            ? {
+                collectedDepositMinor: { increment: payment.amountMinor },
+                version: { increment: 1 },
+              }
+            : {
+                refundedDepositMinor: { increment: payment.amountMinor },
+                version: { increment: 1 },
+              },
+      });
+      await this.audit.create(
+        {
+          organizationId: actor.organizationId,
+          userId: actor.userId,
+          actorType: "USER",
+          actorId: actor.userId,
+          action: `service.deposit.${input.kind.toLowerCase()}`,
+          entityType: "ServiceBooking",
+          entityId: bookingId,
+          branchId: booking.branchId,
+          afterValue: {
+            amountMinor: payment.amountMinor,
+            method: payment.method,
+            reference: input.reference,
+          },
+          ...meta,
+        },
+        tx,
+      );
+      const result = { booking: updated };
+      await tx.idempotencyKey.update({
+        where: {
+          organizationId_key_operation: {
+            organizationId: actor.organizationId,
+            key,
+            operation,
+          },
+        },
+        data: { responseCode: 201, responseBody: result as any },
+      });
+      return result;
+    });
+  }
   async applyDeposit(
     actor: Actor,
     bookingId: string,
@@ -241,8 +359,16 @@ export class Phase4Service {
       await this.branch(tx, actor, booking.branchId);
       if (booking.appliedOrderId)
         throw new ConflictException("Deposit has already been applied.");
-      if (booking.depositMinor <= 0)
-        throw new BadRequestException("Booking has no deposit to apply.");
+      const availableDeposit =
+        booking.collectedDepositMinor - booking.refundedDepositMinor;
+      if (availableDeposit <= 0)
+        throw new BadRequestException(
+          "Booking has no collected deposit to apply.",
+        );
+      if (!["CONFIRMED", "SEATED"].includes(booking.status))
+        throw new ConflictException(
+          "Booking status is not eligible for deposit application.",
+        );
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM pos_orders WHERE id=CAST(${orderId} AS uuid) AND organization_id=CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
       );
@@ -253,13 +379,22 @@ export class Phase4Service {
           branchId: booking.branchId,
           orderType: "DINE_IN",
           status: { in: ["UNPAID", "OPEN"] },
+          ...(booking.tableId ? { tableId: booking.tableId } : {}),
         },
+        include: { payments: true },
       });
       if (!order)
         throw new ConflictException(
           "Deposit can only be applied to an eligible dine-in order.",
         );
-      const amount = Math.min(booking.depositMinor, order.totalMinor);
+      const alreadyPaidMinor = order.payments.reduce(
+        (sum: number, payment: any) => sum + payment.amountMinor,
+        0,
+      );
+      const outstandingMinor = Math.max(0, order.totalMinor - alreadyPaidMinor);
+      if (outstandingMinor === 0)
+        throw new ConflictException("Order has no remaining balance.");
+      const amount = Math.min(availableDeposit, outstandingMinor);
       await tx.posOrderPayment.create({
         data: {
           organizationId: actor.organizationId,
@@ -267,7 +402,7 @@ export class Phase4Service {
           method: "DEPOSIT",
           amountMinor: amount,
           reference: booking.id,
-          tenderKind: "MANUAL",
+          tenderKind: "DEPOSIT",
         },
       });
       await tx.posOrder.update({
@@ -278,6 +413,7 @@ export class Phase4Service {
         where: { id: booking.id },
         data: {
           appliedOrderId: orderId,
+          appliedDepositMinor: amount,
           status: "SEATED",
           version: { increment: 1 },
         },
@@ -304,6 +440,459 @@ export class Phase4Service {
             organizationId: actor.organizationId,
             key,
             operation: "phase4.booking.deposit.apply",
+          },
+        },
+        data: { responseCode: 201, responseBody: result as any },
+      });
+      return result;
+    });
+  }
+  async transitionBooking(
+    actor: Actor,
+    bookingId: string,
+    input: any,
+    key: string,
+    meta: any,
+  ) {
+    const allowed: Record<string, string[]> = {
+      CONFIRMED: ["SEATED", "CANCELLED", "NO_SHOW"],
+      WAITLISTED: ["CONFIRMED", "CANCELLED", "NO_SHOW"],
+      SEATED: ["COMPLETED", "CANCELLED"],
+      CANCELLED: [],
+      COMPLETED: [],
+      NO_SHOW: [],
+    };
+    return this.prisma.withTenant(actor.organizationId, async (tx) => {
+      const operation = `phase4.booking.transition.${input.status.toLowerCase()}`;
+      const prior = await this.idem(tx, actor, key, operation, {
+        bookingId,
+        ...input,
+      });
+      if (prior) return prior;
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM service_bookings WHERE id=CAST(${bookingId} AS uuid) AND organization_id=CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
+      );
+      const booking = await tx.serviceBooking.findFirst({
+        where: { id: bookingId, organizationId: actor.organizationId },
+      });
+      if (!booking) throw new NotFoundException("Booking not found.");
+      await this.branch(tx, actor, booking.branchId);
+      if (!(allowed[booking.status] ?? []).includes(input.status))
+        throw new ConflictException(
+          `A ${booking.status} booking cannot become ${input.status}.`,
+        );
+      const closing = ["CANCELLED", "NO_SHOW", "COMPLETED"].includes(
+        input.status,
+      );
+      if (closing) {
+        const refundableMinor =
+          booking.collectedDepositMinor -
+          booking.refundedDepositMinor -
+          booking.appliedDepositMinor;
+        if (refundableMinor > 0)
+          throw new ConflictException(
+            "Refund the unapplied collected deposit before closing this booking.",
+          );
+        if (booking.appliedOrderId) {
+          const order = await tx.posOrder.findFirst({
+            where: {
+              id: booking.appliedOrderId,
+              organizationId: actor.organizationId,
+            },
+          });
+          if (order && ["UNPAID", "OPEN"].includes(order.status))
+            throw new ConflictException(
+              "Settle the linked order before closing this booking.",
+            );
+        }
+      }
+      const updated = await tx.serviceBooking.update({
+        where: { id: bookingId },
+        data: {
+          status: input.status,
+          ...(input.status === "CANCELLED" || input.status === "NO_SHOW"
+            ? { cancellationReason: input.reason ?? null }
+            : {}),
+          version: { increment: 1 },
+        },
+      });
+      await this.audit.create(
+        {
+          organizationId: actor.organizationId,
+          userId: actor.userId,
+          actorType: "USER",
+          actorId: actor.userId,
+          action: `service.booking.${input.status.toLowerCase()}`,
+          entityType: "ServiceBooking",
+          entityId: bookingId,
+          branchId: booking.branchId,
+          beforeValue: { status: booking.status },
+          afterValue: { status: input.status, reason: input.reason ?? null },
+          ...meta,
+        },
+        tx,
+      );
+      const result = { booking: updated };
+      await tx.idempotencyKey.update({
+        where: {
+          organizationId_key_operation: {
+            organizationId: actor.organizationId,
+            key,
+            operation,
+          },
+        },
+        data: { responseCode: 200, responseBody: result as any },
+      });
+      return result;
+    });
+  }
+  async deliveryDispatch(
+    actor: Actor,
+    bookingId: string,
+    input: any,
+    key: string,
+    meta: any,
+  ) {
+    return this.prisma.withTenant(actor.organizationId, async (tx) => {
+      const operation = `phase4.booking.delivery.${input.action.toLowerCase()}`;
+      const prior = await this.idem(tx, actor, key, operation, {
+        bookingId,
+        ...input,
+      });
+      if (prior) return prior;
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM service_bookings WHERE id=CAST(${bookingId} AS uuid) AND organization_id=CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
+      );
+      const booking = await tx.serviceBooking.findFirst({
+        where: { id: bookingId, organizationId: actor.organizationId },
+      });
+      if (!booking) throw new NotFoundException("Booking not found.");
+      await this.branch(tx, actor, booking.branchId);
+      if (booking.kind !== "DELIVERY")
+        throw new ConflictException("Only delivery bookings can be dispatched.");
+      const order = booking.appliedOrderId
+        ? await tx.posOrder.findFirst({
+            where: {
+              id: booking.appliedOrderId,
+              organizationId: actor.organizationId,
+            },
+          })
+        : null;
+      const dispatched =
+        input.action === "DISPATCH"
+          ? { status: "IN_TRANSIT", dispatchedAt: new Date() }
+          : { status: "DELIVERED", deliveredAt: new Date() };
+      if (input.action === "DISPATCH") {
+        if (booking.status !== "CONFIRMED")
+          throw new ConflictException(
+            "Only a confirmed delivery booking can be dispatched.",
+          );
+        if (!booking.deliveryAddress)
+          throw new BadRequestException(
+            "A delivery address is required before dispatch.",
+          );
+        if (!order)
+          throw new ConflictException(
+            "Link a paid order to this delivery before dispatch.",
+          );
+        if (order.status !== "PAID")
+          throw new ConflictException(
+            "Settle the delivery order before dispatch.",
+          );
+      } else if (input.action === "COMPLETE") {
+        if (booking.status !== "IN_TRANSIT" || !booking.dispatchedAt)
+          throw new ConflictException(
+            "Only a dispatched delivery can be completed.",
+          );
+        if (!order || order.status !== "PAID")
+          throw new ConflictException(
+            "The delivery order must be settled before completion.",
+          );
+      } else {
+        throw new BadRequestException("Unsupported delivery action.");
+      }
+      const updated = await tx.serviceBooking.update({
+        where: { id: bookingId },
+        data: {
+          status: dispatched.status,
+          dispatchedAt: dispatched.dispatchedAt ?? undefined,
+          deliveredAt: dispatched.deliveredAt ?? undefined,
+          courierName: input.courierName ?? booking.courierName,
+          version: { increment: 1 },
+        },
+      });
+      await this.audit.create(
+        {
+          organizationId: actor.organizationId,
+          userId: actor.userId,
+          actorType: "USER",
+          actorId: actor.userId,
+          action: `service.delivery.${input.action.toLowerCase()}`,
+          entityType: "ServiceBooking",
+          entityId: bookingId,
+          branchId: booking.branchId,
+          afterValue: {
+            status: dispatched.status,
+            courierName: input.courierName ?? booking.courierName,
+          },
+          ...meta,
+        },
+        tx,
+      );
+      const result = { booking: updated };
+      await tx.idempotencyKey.update({
+        where: {
+          organizationId_key_operation: {
+            organizationId: actor.organizationId,
+            key,
+            operation,
+          },
+        },
+        data: { responseCode: 200, responseBody: result as any },
+      });
+      return result;
+    });
+  }
+  async splitOrder(actor: Actor, orderId: string, input: any, key: string, meta: any) {
+    return this.prisma.withTenant(actor.organizationId, async (tx) => {
+      const prior = await this.idem(
+        tx,
+        actor,
+        key,
+        "phase4.dinein.split",
+        { orderId, ...input },
+      );
+      if (prior) return prior;
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM pos_orders WHERE id=CAST(${orderId} AS uuid) AND organization_id=CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
+      );
+      const order = await tx.posOrder.findFirst({
+        where: { id: orderId, organizationId: actor.organizationId },
+        include: { payments: true, shares: true },
+      });
+      if (!order) throw new NotFoundException("Order not found.");
+      await this.branch(tx, actor, order.branchId);
+      if (order.orderType !== "DINE_IN" || !["UNPAID", "OPEN"].includes(order.status))
+        throw new ConflictException(
+          "Only an open dine-in order can be split.",
+        );
+      if (order.shares.some((s: any) => s.status !== "VOID"))
+        throw new ConflictException("This order is already split.");
+      const alreadyPaidMinor = order.payments
+        .filter((p: any) => !p.shareId)
+        .reduce((sum: number, p: any) => sum + p.amountMinor, 0);
+      const outstandingMinor = Math.max(0, order.totalMinor - alreadyPaidMinor);
+      const shares = input.shares ?? [];
+      if (shares.length < 2)
+        throw new BadRequestException("A split needs at least two shares.");
+      const labels = new Set<string>();
+      let summed = 0;
+      for (const share of shares) {
+        const label = String(share.label ?? "").trim();
+        if (!label || labels.has(label))
+          throw new BadRequestException("Each share needs a unique label.");
+        labels.add(label);
+        summed += safeAmount(share.totalMinor);
+      }
+      if (summed !== outstandingMinor)
+        throw new BadRequestException(
+          `Shares must total the remaining balance of ${outstandingMinor}.`,
+        );
+      await tx.posOrderShare.deleteMany({
+        where: { organizationId: actor.organizationId, orderId },
+      });
+      const created = [];
+      for (const share of shares)
+        created.push(
+          await tx.posOrderShare.create({
+            data: {
+              organizationId: actor.organizationId,
+              orderId,
+              label: String(share.label).trim(),
+              totalMinor: safeAmount(share.totalMinor),
+              createdById: actor.userId,
+            },
+          }),
+        );
+      await this.audit.create(
+        {
+          organizationId: actor.organizationId,
+          userId: actor.userId,
+          actorType: "USER",
+          actorId: actor.userId,
+          action: "dinein.order.split",
+          entityType: "PosOrder",
+          entityId: orderId,
+          branchId: order.branchId,
+          afterValue: { shares: created.map((s: any) => [s.label, s.totalMinor]) },
+          ...meta,
+        },
+        tx,
+      );
+      const result = { order: await tx.posOrder.findUniqueOrThrow({ where: { id: orderId }, include: { shares: true } }) };
+      await tx.idempotencyKey.update({
+        where: {
+          organizationId_key_operation: {
+            organizationId: actor.organizationId,
+            key,
+            operation: "phase4.dinein.split",
+          },
+        },
+        data: { responseCode: 201, responseBody: result as any },
+      });
+      return result;
+    });
+  }
+  async settleShare(
+    actor: Actor,
+    shareId: string,
+    input: any,
+    key: string,
+    meta: any,
+  ) {
+    return this.prisma.withTenant(actor.organizationId, async (tx) => {
+      const prior = await this.idem(
+        tx,
+        actor,
+        key,
+        "phase4.dinein.share.settle",
+        { shareId, ...input },
+      );
+      if (prior) return prior;
+      const known = await tx.posOrderShare.findFirst({
+        where: { id: shareId, organizationId: actor.organizationId },
+        select: { orderId: true },
+      });
+      if (!known) throw new NotFoundException("Share not found.");
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM pos_orders WHERE id=CAST(${known.orderId} AS uuid) AND organization_id=CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
+      );
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM pos_order_shares WHERE id=CAST(${shareId} AS uuid) AND organization_id=CAST(${actor.organizationId} AS uuid) FOR UPDATE`,
+      );
+      const share = await tx.posOrderShare.findFirst({
+        where: { id: shareId, organizationId: actor.organizationId },
+      });
+      if (!share) throw new NotFoundException("Share not found.");
+      const order = await tx.posOrder.findFirst({
+        where: { id: share.orderId, organizationId: actor.organizationId },
+        include: { table: true, shares: true, payments: true },
+      });
+      if (!order) throw new NotFoundException("Order not found.");
+      await this.branch(tx, actor, order.branchId);
+      if (order.orderType !== "DINE_IN" || !["UNPAID", "OPEN"].includes(order.status))
+        throw new ConflictException("Only an open dine-in order can settle a share.");
+      if (share.status !== "OPEN")
+        throw new ConflictException("This share is already settled.");
+      const register = await this.pos.lockOpenRegister(
+        tx,
+        actor,
+        input.registerId,
+        order.branchId,
+      );
+      if (!register)
+        throw new BadRequestException(
+          "An open register for this branch is required.",
+        );
+      const payments = input.payments ?? [];
+      if (!payments.length)
+        throw new BadRequestException("At least one payment is required.");
+      const tender = await this.pos.validateTender(
+        tx,
+        actor,
+        payments,
+        share.totalMinor,
+      );
+      const receiptNumber = `R-${String(order.orderNumber).padStart(6, "0")}-${share.label.replace(/[^A-Za-z0-9]+/g, "").slice(0, 8).toUpperCase()}`;
+      await tx.posOrderPayment.createMany({
+        data: payments.map((p: any) => ({
+          organizationId: actor.organizationId,
+          orderId: order.id,
+          shareId: share.id,
+          method: p.method,
+          amountMinor: safeAmount(p.amountMinor),
+          reference: p.reference,
+          tenderKind: "MANUAL",
+        })),
+      });
+      const settledShare = await tx.posOrderShare.update({
+        where: { id: share.id },
+        data: {
+          status: "SETTLED",
+          paidMinor: tender.paidMinor,
+          settledById: actor.userId,
+          settledAt: new Date(),
+          receiptNumber,
+        },
+      });
+      const allSettled = order.shares.every((s: any) =>
+        s.id === share.id ? true : s.status === "SETTLED",
+      );
+      let receipt: any = null;
+      if (allSettled) {
+        const paidMinor =
+          order.payments
+            .filter((p: any) => !p.shareId)
+            .reduce((sum: number, p: any) => sum + p.amountMinor, 0) +
+          order.shares
+            .filter((s: any) => s.id !== share.id && s.status === "SETTLED")
+            .reduce((sum: number, s: any) => sum + s.paidMinor, 0) +
+          tender.paidMinor;
+        await tx.posOrder.update({
+          where: { id: order.id },
+          data: {
+            registerId: register.id,
+            status: "PAID",
+            serviceStatus: "CLOSED",
+            paidMinor,
+            changeMinor: { increment: tender.changeMinor },
+            version: { increment: 1 },
+          },
+        });
+        receipt = await tx.posReceipt.create({
+          data: {
+            organizationId: actor.organizationId,
+            orderId: order.id,
+            receiptNumber: `R-${String(order.orderNumber).padStart(6, "0")}`,
+          },
+        });
+        if (order.tableId)
+          await tx.floorTable.update({
+            where: { id: order.tableId },
+            data: { status: "AVAILABLE" },
+          });
+      } else {
+        await tx.posOrder.update({
+          where: { id: order.id },
+          data: { registerId: register.id, version: { increment: 1 } },
+        });
+      }
+      await this.audit.create(
+        {
+          organizationId: actor.organizationId,
+          userId: actor.userId,
+          actorType: "USER",
+          actorId: actor.userId,
+          action: "dinein.share.settled",
+          entityType: "PosOrder",
+          entityId: order.id,
+          branchId: order.branchId,
+          afterValue: { shareId: share.id, amountMinor: tender.paidMinor },
+          ...meta,
+        },
+        tx,
+      );
+      const result = {
+        share: settledShare,
+        receipt,
+        orderStatus: allSettled ? "PAID" : order.status,
+      };
+      await tx.idempotencyKey.update({
+        where: {
+          organizationId_key_operation: {
+            organizationId: actor.organizationId,
+            key,
+            operation: "phase4.dinein.share.settle",
           },
         },
         data: { responseCode: 201, responseBody: result as any },
@@ -815,7 +1404,7 @@ export class Phase4Service {
           status: { in: ["UNPAID", "OPEN"] },
           serviceStatus: { notIn: ["CLOSED", "VOID", "CANCELLED"] },
         },
-        include: { table: true, tickets: true, items: true },
+        include: { table: true, tickets: true, items: true, payments: true, shares: true },
         orderBy: { createdAt: "desc" },
       });
     });
@@ -831,7 +1420,7 @@ export class Phase4Service {
           status: { not: "PAID" },
           serviceStatus: { not: "CLOSED" },
         },
-        include: { table: true, tickets: true, items: true },
+        include: { table: true, tickets: true, items: true, payments: true, shares: true },
         orderBy: { createdAt: "asc" },
       });
     });
@@ -877,13 +1466,13 @@ export class Phase4Service {
           "An open register for this branch is required.",
         );
       const payments = input.payments ?? [];
-      if (!payments.length)
-        throw new BadRequestException("At least one payment is required.");
       const previouslyPaid = order.payments.reduce(
         (sum: number, payment: any) => sum + payment.amountMinor,
         0,
       );
       const payableMinor = Math.max(0, order.totalMinor - previouslyPaid);
+      if (payableMinor > 0 && !payments.length)
+        throw new BadRequestException("At least one payment is required.");
       const tender = await this.pos.validateTender(
         tx,
         actor,

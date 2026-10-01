@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Post,
@@ -45,7 +46,7 @@ const settle = z.object({
         reference: z.string().max(160).optional(),
       }),
     )
-    .min(1),
+    .default([]),
 });
 const transfer = z.object({
   tableId: z.string().uuid(),
@@ -63,8 +64,37 @@ const booking = branch.extend({
   notes: z.string().max(500).optional(),
   details: z.record(z.unknown()).optional(),
   depositMinor: z.number().int().nonnegative().optional(),
+  deliveryAddress: z.string().trim().min(1).max(300).optional(),
+  deliveryPhone: z.string().trim().min(1).max(30).optional(),
+  deliveryFeeMinor: z.number().int().nonnegative().optional(),
+  courierName: z.string().trim().max(120).optional(),
 });
 const applyDeposit = z.object({ orderId: z.string().uuid() });
+const depositTransaction = z.object({
+  kind: z.enum(["COLLECTION", "REFUND"]),
+  method: z.string().trim().min(1).max(40),
+  amountMinor: z.number().int().positive(),
+  reference: z.string().trim().max(160).optional(),
+  verifiedExternal: z.boolean().optional(),
+});
+const transitionBooking = z.object({
+  status: z.enum(["SEATED", "COMPLETED", "CANCELLED", "NO_SHOW", "CONFIRMED"]),
+  reason: z.string().trim().max(300).optional(),
+});
+const deliveryAction = z.object({
+  action: z.enum(["DISPATCH", "COMPLETE"]),
+  courierName: z.string().trim().max(120).optional(),
+});
+const splitOrder = z.object({
+  shares: z
+    .array(
+      z.object({
+        label: z.string().trim().min(1).max(80),
+        totalMinor: z.number().int().positive(),
+      }),
+    )
+    .min(2),
+});
 
 @Controller("phase4")
 @UseGuards(UserAuthGuard, PermissionGuard)
@@ -214,5 +244,68 @@ export class Phase4Controller {
       key,
       requestMetadata(req),
     );
+  }
+  @Post("bookings/:id/deposit-transactions")
+  @RequirePermissions("reservations.manage")
+  recordDeposit(
+    @CurrentUser() u: UserPrincipal,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Headers("idempotency-key") key: string,
+    @Body(new ZodValidationPipe(depositTransaction)) body: any,
+    @Req() req: any,
+  ) {
+    return this.service.recordDeposit(u, id, body, key, requestMetadata(req));
+  }
+  @Post("bookings/:id/transition")
+  @HttpCode(200)
+  @RequirePermissions("reservations.manage")
+  transition(
+    @CurrentUser() u: UserPrincipal,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Headers("idempotency-key") key: string,
+    @Body(new ZodValidationPipe(transitionBooking)) body: any,
+    @Req() req: any,
+  ) {
+    return this.service.transitionBooking(
+      u,
+      id,
+      body,
+      key,
+      requestMetadata(req),
+    );
+  }
+  @Post("bookings/:id/delivery")
+  @HttpCode(200)
+  @RequirePermissions("delivery.dispatch")
+  delivery(
+    @CurrentUser() u: UserPrincipal,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Headers("idempotency-key") key: string,
+    @Body(new ZodValidationPipe(deliveryAction)) body: any,
+    @Req() req: any,
+  ) {
+    return this.service.deliveryDispatch(u, id, body, key, requestMetadata(req));
+  }
+  @Post("dine-in/orders/:id/split")
+  @RequirePermissions("orders.split.manage")
+  split(
+    @CurrentUser() u: UserPrincipal,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Headers("idempotency-key") key: string,
+    @Body(new ZodValidationPipe(splitOrder)) body: any,
+    @Req() req: any,
+  ) {
+    return this.service.splitOrder(u, id, body, key, requestMetadata(req));
+  }
+  @Post("shares/:id/settle")
+  @RequirePermissions("orders.dinein.settle")
+  settleShare(
+    @CurrentUser() u: UserPrincipal,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Headers("idempotency-key") key: string,
+    @Body(new ZodValidationPipe(settle)) body: any,
+    @Req() req: any,
+  ) {
+    return this.service.settleShare(u, id, body, key, requestMetadata(req));
   }
 }

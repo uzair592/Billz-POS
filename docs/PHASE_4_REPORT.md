@@ -66,3 +66,32 @@ Cross-waiter access is now explicit: ordinary waiters may view and add only to o
 Transfer hardening now requires an eligible open dine-in state and verifies that the target user is active, assigned to the branch, and has `orders.dinein.create`. The management UI freezes the transfer target, body, and idempotency key across uncertain retries. Database-backed HTTP coverage now creates two distinct waiter accounts and a manager, proves guessed-ID reads/additions are denied, performs an authorized reassignment, and verifies both waiters' access after transfer. The Phase 4 suite exited 0 with 3 tests passing in 16.706 seconds.
 
 Service booking migration `20260924001200_phase_4_service_bookings` adds tenant-scoped reservation, waitlist, advance-takeaway, and delivery records with RLS, tenant-consistent foreign keys, and a PostgreSQL exclusion constraint preventing concurrent overlapping confirmed table bookings. Deposits remain separate booking amounts until an idempotent, locked application creates one `DEPOSIT` payment on an eligible dine-in order; settlement charges only the remaining balance. A visible Reservations & delivery screen creates and lists these booking types in PKR. The Phase 4 suite exited 0 with 4 tests passing in 24.822 seconds, including overlap rejection and deposit-once persisted-row assertions. Full delivery dispatch fields, bill splitting, cancellation tickets, and browser acceptance remain open.
+
+## Collected deposits are separate from requested deposits
+
+Migration `20260924001300_phase_4_collected_deposits` adds `collected_deposit_minor`, `refunded_deposit_minor`, and `applied_deposit_minor` to `service_bookings`, plus an audited `booking_deposit_transactions` ledger with RLS and tenant-consistent foreign keys.
+
+`depositMinor` is now informational only. An order balance is never reduced because a booking requests a deposit. Money moves only through `POST /phase4/bookings/:id/deposit-transactions`, which requires `reservations.manage`, rejects any claim of external verification, reuses the shared `validateManualPayment` tender rules so an inactive method cannot be recorded, writes one immutable ledger row, and emits an audit entry. Applying a deposit requires `collected - refunded > 0`, an eligible booking status, and a same-branch `DINE_IN` order on the booking's table that is still `UNPAID`/`OPEN`. The applied amount is capped at the order's outstanding balance, so partial, excess, and fully prepaid deposits are all handled; settlement then charges only what remains and accepts an empty payment list when the balance is already zero.
+
+Booking lifecycle, delivery dispatch, and bill splitting arrive in `20260924001400_phase_4_delivery_and_shares`, which adds delivery address/phone/fee/courier fields with a dispatch-ordering check constraint, the `pos_order_shares` table with RLS, and an optional `share_id` on payments.
+
+- `POST /phase4/bookings/:id/transition` enforces an explicit status transition table. Cancelling or marking a no-show is refused while an unapplied collected deposit or an unsettled linked order remains, so money cannot be stranded.
+- `POST /phase4/bookings/:id/delivery` requires a settled linked order before dispatch and before completion, and records courier and timestamps.
+- `POST /phase4/dine-in/orders/:id/split` requires shares to total the exact remaining balance and rejects re-splitting; `POST /phase4/shares/:id/settle` locks order before share to match the split lock order, settles each share once with its own receipt number, and closes the order, issues the receipt, and releases the table only when every share is settled.
+
+New permissions are granted both by migration and in `DEFAULT_ROLES` in `platform.service.ts`. The migration alone was not sufficient: organization provisioning builds roles from that in-code default map, so without the code change new tenants would never receive `orders.split.manage` or `delivery.dispatch`. This was found by the browser run returning 403.
+
+## Verification for this increment
+
+- `corepack pnpm prisma validate` and `corepack pnpm prisma generate` — passed.
+- `corepack pnpm typecheck` — passed across `packages/contracts`, `apps/api`, and `apps/web`.
+- `node scripts/test-phase-1.cjs` (isolated acceptance database, 23 migrations) — 4 suites and 22 tests passed, including `apps/api/test/phase-4.e2e-spec.ts` with 8 tests. New coverage: requested versus collected versus refunded versus applied deposits, idempotent replay of a collection, concurrent deposit application producing exactly one `DEPOSIT` payment, partial net deposit settlement of only the remainder, the cancellation deposit guard, delivery dispatch gating, and split-share settlement with a concurrent second settle producing exactly one winner.
+- `node scripts/phase-4-browser.cjs` — passed with separate authenticated waiter (390x844), kitchen (1024x768), and cashier (1366x768) sessions covering modifiers, kitchen notes, a delta ticket, the PKR minor-unit boundary, receipt reprint, persisted rows, table release, requested-versus-collected deposit recording, deposit application to an order, the blocked cancellation alert, and split-bill share settlement. Database assertions run after the walkthrough and verify payment method, amount, receipt, share status, and table state.
+
+Two defects were fixed to make that run pass: the POS register `<label>` had no `htmlFor`/`id` association so it was not programmatically labelled, and the browser script used a substring label matcher that resolved two selects.
+
+Three screenshots (`desktop-cashier-after-deposit`, `desktop-cashier-split`, `desktop-cashier-split-settled`) were not captured: Chrome's screenshot call times out on the cashier route after a repeat navigation in this environment, while the same page's assertions and persisted-state checks all passed. The other eight screenshots, including the requested/collected/applied deposit sequence, were written to `docs/phase-4/screenshots/`.
+
+## Remaining Phase 4 gates
+
+Physical kitchen display and printer hardware remain unverified. Per-share receipt rendering and printing of split bills are not implemented; shares carry a receipt number but the printable document is still the single order receipt. Realtime delivery for outbox events is polling-only. Phase 4 is still not complete, and this PR stays draft.

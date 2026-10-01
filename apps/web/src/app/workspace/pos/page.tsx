@@ -179,8 +179,11 @@ export default function PosPage() {
       <div className="grid">
         <Card>
           <h2>Register</h2>
-          <label className="label">Branch</label>
+          <label className="label" htmlFor="pos-branch">
+            Branch
+          </label>
           <select
+            id="pos-branch"
             className="input"
             value={branchId}
             onChange={(e) => {

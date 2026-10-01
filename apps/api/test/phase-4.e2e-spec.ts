@@ -341,12 +341,19 @@ run("Phase 4 dine-in acceptance", () => {
     expect(receipt.text).toContain("Oat");
     expect(receipt.text).toContain("No sugar");
   });
-  it("prevents overlapping reservations and applies a deposit once", async () => {
+  it("separates requested, collected, refunded, and applied deposits", async () => {
+    const order = await db.posOrder.findFirstOrThrow({
+      where: {
+        organizationId: orgId,
+        createdById: waiterBId,
+        status: "UNPAID",
+      },
+    });
     const startsAt = new Date(Date.now() + 86_400_000).toISOString();
     const endsAt = new Date(Date.now() + 90_000_000).toISOString();
     const payload = {
       branchId,
-      tableId,
+      tableId: order.tableId,
       kind: "RESERVATION",
       customerName: "Deposit Guest",
       partySize: 2,
@@ -366,25 +373,63 @@ run("Phase 4 dine-in acceptance", () => {
       .set("Idempotency-Key", randomUUID())
       .send(payload)
       .expect(409);
-    const order = await db.posOrder.findFirstOrThrow({
-      where: {
-        organizationId: orgId,
-        createdById: waiterBId,
-        status: "UNPAID",
-      },
-    });
     await owner
       .post(`/api/v1/phase4/bookings/${booking.body.id}/apply-deposit`)
       .set("x-csrf-token", csrf)
       .set("Idempotency-Key", randomUUID())
       .send({ orderId: order.id })
+      .expect(400);
+    await owner
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/deposit-transactions`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        kind: "COLLECTION",
+        method: "CASH",
+        amountMinor: 1500,
+        verifiedExternal: true,
+      })
+      .expect(400);
+    const collectionKey = randomUUID();
+    const collection = {
+      kind: "COLLECTION",
+      method: "MANUAL_CARD",
+      amountMinor: 1500,
+      reference: "terminal-slip-1",
+    };
+    await owner
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/deposit-transactions`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", collectionKey)
+      .send(collection)
       .expect(201);
     await owner
-      .post(`/api/v1/phase4/bookings/${booking.body.id}/apply-deposit`)
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/deposit-transactions`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", collectionKey)
+      .send(collection)
+      .expect(201);
+    await owner
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/deposit-transactions`)
       .set("x-csrf-token", csrf)
       .set("Idempotency-Key", randomUUID())
-      .send({ orderId: order.id })
-      .expect(409);
+      .send({ kind: "REFUND", method: "CASH", amountMinor: 200 })
+      .expect(201);
+    const applications = await Promise.all([
+      owner
+        .post(`/api/v1/phase4/bookings/${booking.body.id}/apply-deposit`)
+        .set("x-csrf-token", csrf)
+        .set("Idempotency-Key", randomUUID())
+        .send({ orderId: order.id }),
+      owner
+        .post(`/api/v1/phase4/bookings/${booking.body.id}/apply-deposit`)
+        .set("x-csrf-token", csrf)
+        .set("Idempotency-Key", randomUUID())
+        .send({ orderId: order.id }),
+    ]);
+    expect(applications.map((response) => response.status).sort()).toEqual([
+      201, 409,
+    ]);
     expect(
       await db.posOrderPayment.count({
         where: { orderId: order.id, method: "DEPOSIT" },
@@ -395,5 +440,380 @@ run("Phase 4 dine-in acceptance", () => {
     });
     expect(saved.appliedOrderId).toBe(order.id);
     expect(saved.depositMinor).toBe(300);
+    expect(saved.collectedDepositMinor).toBe(1500);
+    expect(saved.refundedDepositMinor).toBe(200);
+    expect(saved.appliedDepositMinor).toBe(order.totalMinor);
+    expect(
+      await db.bookingDepositTransaction.count({
+        where: { bookingId: booking.body.id },
+      }),
+    ).toBe(2);
+    await owner
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/deposit-transactions`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ kind: "REFUND", method: "CASH", amountMinor: 301 })
+      .expect(400);
+    const settled = await owner
+      .post(`/api/v1/phase4/dine-in/orders/${order.id}/settle`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ registerId, payments: [] })
+      .expect(201);
+    expect(settled.body.order.status).toBe("PAID");
+    expect(settled.body.order.changeMinor).toBe(0);
+    const finalized = await db.posOrder.findUniqueOrThrow({
+      where: { id: order.id },
+      include: { payments: true, receipt: true, table: true },
+    });
+    expect(finalized.payments).toEqual([
+      expect.objectContaining({
+        method: "DEPOSIT",
+        amountMinor: order.totalMinor,
+        tenderKind: "DEPOSIT",
+      }),
+    ]);
+    expect(finalized.receipt).not.toBeNull();
+    expect(finalized.table?.status).toBe("AVAILABLE");
+  });
+
+  it("applies a partial net deposit and settles only the remaining balance", async () => {
+    const table = (
+      await owner
+        .post("/api/v1/phase4/tables")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, name: `Deposit-${suffix}`, capacity: 2 })
+        .expect(201)
+    ).body;
+    const opened = await owner
+      .post("/api/v1/phase4/dine-in/orders")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        branchId,
+        tableId: table.id,
+        stationId,
+        items: [{ productId, quantity: 1 }],
+      })
+      .expect(201);
+    const startsAt = new Date(Date.now() + 172_800_000).toISOString();
+    const booking = await owner
+      .post("/api/v1/phase4/bookings")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        branchId,
+        tableId: table.id,
+        kind: "RESERVATION",
+        customerName: "Partial Deposit Guest",
+        partySize: 2,
+        startsAt,
+        endsAt: new Date(Date.now() + 176_400_000).toISOString(),
+        depositMinor: 800,
+      })
+      .expect(201);
+    await owner
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/deposit-transactions`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ kind: "COLLECTION", method: "CASH", amountMinor: 400 })
+      .expect(201);
+    await owner
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/deposit-transactions`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ kind: "REFUND", method: "CASH", amountMinor: 100 })
+      .expect(201);
+    const applied = await owner
+      .post(`/api/v1/phase4/bookings/${booking.body.id}/apply-deposit`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ orderId: opened.body.order.id })
+      .expect(201);
+    expect(applied.body.appliedMinor).toBe(300);
+    await owner
+      .post(`/api/v1/phase4/dine-in/orders/${opened.body.order.id}/settle`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        registerId,
+        payments: [{ method: "CASH", amountMinor: 700 }],
+      })
+      .expect(201);
+    const finalized = await db.posOrder.findUniqueOrThrow({
+      where: { id: opened.body.order.id },
+      include: { payments: true, receipt: true },
+    });
+    expect(finalized.paidMinor).toBe(1000);
+    expect(finalized.payments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ method: "DEPOSIT", amountMinor: 300 }),
+        expect.objectContaining({ method: "CASH", amountMinor: 700 }),
+      ]),
+    );
+    expect(finalized.receipt).not.toBeNull();
+  });
+
+  it("blocks closing a booking until its unapplied deposit is refunded", async () => {
+    const startsAt = new Date(Date.now() + 259_200_000).toISOString();
+    const booking = await owner
+      .post("/api/v1/phase4/bookings")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        branchId,
+        kind: "RESERVATION",
+        customerName: "Cancel Guest",
+        partySize: 2,
+        startsAt,
+        endsAt: new Date(Date.now() + 262_800_000).toISOString(),
+        depositMinor: 5000,
+      })
+      .expect(201);
+    const id = booking.body.id;
+    await owner
+      .post(`/api/v1/phase4/bookings/${id}/deposit-transactions`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ kind: "COLLECTION", method: "CASH", amountMinor: 5000 })
+      .expect(201);
+    const transition = (body: any) =>
+      owner
+        .post(`/api/v1/phase4/bookings/${id}/transition`)
+        .set("x-csrf-token", csrf)
+        .set("Idempotency-Key", randomUUID())
+        .send(body);
+    await transition({ status: "CANCELLED", reason: "Guest withdrew" }).expect(
+      409,
+    );
+    await owner
+      .post(`/api/v1/phase4/bookings/${id}/deposit-transactions`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ kind: "REFUND", method: "CASH", amountMinor: 5000 })
+      .expect(201);
+    const cancelled = await transition({
+      status: "CANCELLED",
+      reason: "Guest withdrew",
+    }).expect(200);
+    expect(cancelled.body.booking.status).toBe("CANCELLED");
+    await transition({ status: "CONFIRMED" }).expect(409);
+    await owner
+      .post(`/api/v1/phase4/bookings/${id}/deposit-transactions`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ kind: "REFUND", method: "CASH", amountMinor: 1 })
+      .expect(400);
+    expect(
+      await db.bookingDepositTransaction.count({ where: { bookingId: id } }),
+    ).toBe(2);
+    await db.serviceBooking.findUniqueOrThrow({
+      where: { id },
+      select: { cancellationReason: true },
+    });
+  });
+
+  it("dispatches and completes a delivery only after the order is settled", async () => {
+    await owner
+      .post("/api/v1/phase4/bookings")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        branchId,
+        kind: "DELIVERY",
+        customerName: "Delivery Guest",
+        contact: "0300-1234567",
+        partySize: 1,
+        startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        endsAt: new Date(Date.now() + 7_200_000).toISOString(),
+      })
+      .expect(400);
+    const table = (
+      await owner
+        .post("/api/v1/phase4/tables")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, name: `Dlv-${suffix}`, capacity: 2 })
+        .expect(201)
+    ).body;
+    const booking = await owner
+      .post("/api/v1/phase4/bookings")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        branchId,
+        kind: "DELIVERY",
+        customerName: "Delivery Guest",
+        contact: "0300-1234567",
+        partySize: 1,
+        startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        endsAt: new Date(Date.now() + 7_200_000).toISOString(),
+        deliveryAddress: "12 Test Street",
+        deliveryPhone: "0300-1234567",
+        deliveryFeeMinor: 150,
+      })
+      .expect(201);
+    const id = booking.body.id;
+    const order = await owner
+      .post("/api/v1/phase4/dine-in/orders")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        branchId,
+        tableId: table.id,
+        stationId,
+        items: [{ productId, quantity: 1 }],
+      })
+      .expect(201);
+    const dispatch = (body: any) =>
+      owner
+        .post(`/api/v1/phase4/bookings/${id}/delivery`)
+        .set("x-csrf-token", csrf)
+        .set("Idempotency-Key", randomUUID())
+        .send(body);
+    await dispatch({ action: "COMPLETE" }).expect(409);
+    await dispatch({ action: "DISPATCH" }).expect(409);
+    await db.serviceBooking.update({
+      where: { id },
+      data: { appliedOrderId: order.body.order.id },
+    });
+    await dispatch({ action: "DISPATCH", courierName: "Rider 1" }).expect(409);
+    await owner
+      .post(`/api/v1/phase4/dine-in/orders/${order.body.order.id}/settle`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        registerId,
+        payments: [{ method: "CASH", amountMinor: 1000 }],
+      })
+      .expect(201);
+    const sent = await dispatch({
+      action: "DISPATCH",
+      courierName: "Rider 1",
+    }).expect(200);
+    expect(sent.body.booking.status).toBe("IN_TRANSIT");
+    expect(sent.body.booking.dispatchedAt).toBeTruthy();
+    const done = await dispatch({ action: "COMPLETE" }).expect(200);
+    expect(done.body.booking.status).toBe("DELIVERED");
+    expect(done.body.booking.deliveredAt).toBeTruthy();
+  });
+
+  it("splits a bill into shares and settles each share exactly once", async () => {
+    const table = (
+      await owner
+        .post("/api/v1/phase4/tables")
+        .set("x-csrf-token", csrf)
+        .send({ branchId, name: `Split-${suffix}`, capacity: 4 })
+        .expect(201)
+    ).body;
+    const opened = await owner
+      .post("/api/v1/phase4/dine-in/orders")
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        branchId,
+        tableId: table.id,
+        stationId,
+        items: [
+          { productId, quantity: 2 },
+          { productId, quantity: 1 },
+        ],
+      })
+      .expect(201);
+    const orderId = opened.body.order.id;
+    const totalMinor = opened.body.order.totalMinor;
+    const splitKey = randomUUID();
+    const badSplit = await owner
+      .post(`/api/v1/phase4/dine-in/orders/${orderId}/split`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", splitKey)
+      .send({
+        shares: [
+          { label: "A", totalMinor: 100 },
+          { label: "B", totalMinor: 200 },
+        ],
+      })
+      .expect(400);
+    expect(badSplit.body.message).toContain("remaining balance");
+    const shares = [
+      { label: "A", totalMinor: Math.floor(totalMinor / 2) },
+      { label: "B", totalMinor: totalMinor - Math.floor(totalMinor / 2) },
+    ];
+    const split = await owner
+      .post(`/api/v1/phase4/dine-in/orders/${orderId}/split`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", splitKey)
+      .send({ shares })
+      .expect(201);
+    expect(split.body.order.shares).toHaveLength(2);
+    await owner
+      .post(`/api/v1/phase4/dine-in/orders/${orderId}/split`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ shares })
+      .expect(409);
+    const shareA = split.body.order.shares.find((s: any) => s.label === "A");
+    const shareB = split.body.order.shares.find((s: any) => s.label === "B");
+    const shareATotalMinor = shares[0]!.totalMinor;
+    const shareBTotalMinor = shares[1]!.totalMinor;
+    const settleA = await owner
+      .post(`/api/v1/phase4/shares/${shareA.id}/settle`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({ registerId, payments: [{ method: "CASH", amountMinor: 1 }] })
+      .expect(400);
+    expect(settleA.body.message).toBeDefined();
+    const first = await owner
+      .post(`/api/v1/phase4/shares/${shareA.id}/settle`)
+      .set("x-csrf-token", csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        registerId,
+        payments: [{ method: "CASH", amountMinor: shareATotalMinor }],
+      })
+      .expect(201);
+    expect(first.body.share.status).toBe("SETTLED");
+    expect(first.body.share.receiptNumber).toContain("A");
+    expect(first.body.orderStatus).not.toBe("PAID");
+    const concurrent = await Promise.all([
+      owner
+        .post(`/api/v1/phase4/shares/${shareB.id}/settle`)
+        .set("x-csrf-token", csrf)
+        .set("Idempotency-Key", randomUUID())
+        .send({
+          registerId,
+          payments: [{ method: "CASH", amountMinor: shareBTotalMinor }],
+        }),
+      owner
+        .post(`/api/v1/phase4/shares/${shareB.id}/settle`)
+        .set("x-csrf-token", csrf)
+        .set("Idempotency-Key", randomUUID())
+        .send({
+          registerId,
+          payments: [{ method: "CASH", amountMinor: shareBTotalMinor }],
+        }),
+    ]);
+    expect(concurrent.map((r) => r.status).sort()).toEqual([201, 409]);
+    const finalized = await db.posOrder.findUniqueOrThrow({
+      where: { id: orderId },
+      include: { payments: true, receipt: true, shares: true, table: true },
+    });
+    expect(finalized.status).toBe("PAID");
+    expect(finalized.serviceStatus).toBe("CLOSED");
+    expect(finalized.paidMinor).toBe(totalMinor);
+    expect(finalized.receipt).not.toBeNull();
+    expect(finalized.table?.status).toBe("AVAILABLE");
+    expect(
+      finalized.payments.filter((p: any) => p.shareId).length,
+    ).toBe(2);
+    expect(
+      finalized.payments
+        .filter((p: any) => p.shareId)
+        .reduce((sum: number, p: any) => sum + p.amountMinor, 0),
+    ).toBe(totalMinor);
+    expect(
+      finalized.shares.every(
+        (s: any) => s.status === "SETTLED" && s.receiptNumber,
+      ),
+    ).toBe(true);
   });
 });
