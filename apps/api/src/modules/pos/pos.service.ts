@@ -92,22 +92,63 @@ export class PosService {
     });
   }
 
-  async validateTender(tx: any, actor: Actor, payments: any[], totalMinor: number) {
-    let paidMinor = 0, cashMinor = 0, nonCashMinor = 0;
+  async validateTender(
+    tx: any,
+    actor: Actor,
+    payments: any[],
+    totalMinor: number,
+  ) {
+    let paidMinor = 0,
+      cashMinor = 0,
+      nonCashMinor = 0;
     for (const payment of payments ?? []) {
-      const amount = safeMinor(payment.amountMinor, "Tender amount");
-      if (amount <= 0) throw new BadRequestException("Tender amount must be positive.");
-      const method = String(payment.method).toUpperCase();
-      const allowed = BUILTIN_TENDERS.has(method) || await tx.paymentMethod.findFirst({ where: { organizationId: actor.organizationId, key: payment.method, isActive: true } });
-      if (!allowed) throw new BadRequestException(`Payment method ${payment.method} is not active.`);
-      if (payment.verifiedExternal) throw new BadRequestException("Manual tenders cannot claim external verification.");
-      paidMinor += amount; if (method === "CASH") cashMinor += amount; else nonCashMinor += amount;
+      const validated = await this.validateManualPayment(tx, actor, payment);
+      paidMinor += validated.amountMinor;
+      if (validated.method === "CASH") cashMinor += validated.amountMinor;
+      else nonCashMinor += validated.amountMinor;
     }
-    if (paidMinor < totalMinor) throw new BadRequestException("Tender total is below the order total.");
-    if (nonCashMinor > totalMinor) throw new BadRequestException("Non-cash tender cannot exceed the sale amount.");
-    if (paidMinor > totalMinor && cashMinor === 0) throw new BadRequestException("Only cash tender may include change.");
-    if (paidMinor > totalMinor && paidMinor - totalMinor > cashMinor) throw new BadRequestException("Change cannot exceed cash tender received.");
-    return { paidMinor, cashMinor, nonCashMinor, changeMinor: Math.max(0, paidMinor - totalMinor) };
+    if (paidMinor < totalMinor)
+      throw new BadRequestException("Tender total is below the order total.");
+    if (nonCashMinor > totalMinor)
+      throw new BadRequestException(
+        "Non-cash tender cannot exceed the sale amount.",
+      );
+    if (paidMinor > totalMinor && cashMinor === 0)
+      throw new BadRequestException("Only cash tender may include change.");
+    if (paidMinor > totalMinor && paidMinor - totalMinor > cashMinor)
+      throw new BadRequestException(
+        "Change cannot exceed cash tender received.",
+      );
+    return {
+      paidMinor,
+      cashMinor,
+      nonCashMinor,
+      changeMinor: Math.max(0, paidMinor - totalMinor),
+    };
+  }
+  async validateManualPayment(tx: any, actor: Actor, payment: any) {
+    const amountMinor = safeMinor(payment.amountMinor, "Payment amount");
+    if (amountMinor <= 0)
+      throw new BadRequestException("Payment amount must be positive.");
+    const method = String(payment.method).toUpperCase();
+    const allowed =
+      BUILTIN_TENDERS.has(method) ||
+      (await tx.paymentMethod.findFirst({
+        where: {
+          organizationId: actor.organizationId,
+          key: payment.method,
+          isActive: true,
+        },
+      }));
+    if (!allowed)
+      throw new BadRequestException(
+        `Payment method ${payment.method} is not active.`,
+      );
+    if (payment.verifiedExternal)
+      throw new BadRequestException(
+        "Manual tenders cannot claim external verification.",
+      );
+    return { amountMinor, method };
   }
 
   async catalog(
@@ -442,6 +483,10 @@ export class PosService {
         taxMinor: tax,
         lineTotalMinor: net,
         modifiers: snapshots,
+        notesSnapshot:
+          typeof item.notes === "string"
+            ? item.notes.trim().slice(0, 500) || null
+            : null,
       });
     }
     const subtotalMinor = lines.reduce((n, l) => n + l.lineTotalMinor, 0);
@@ -554,7 +599,9 @@ export class PosService {
           "Select an open register before checkout.",
         );
       const payments = input.payments ?? [];
-      const tender = input.hold ? { paidMinor: 0, changeMinor: 0 } : await this.validateTender(tx, actor, payments, quote.totalMinor);
+      const tender = input.hold
+        ? { paidMinor: 0, changeMinor: 0 }
+        : await this.validateTender(tx, actor, payments, quote.totalMinor);
       const paidMinor = tender.paidMinor;
       const order = await tx.posOrder.create({
         data: {
@@ -570,9 +617,7 @@ export class PosService {
           taxMode: quote.taxMode,
           discountMinor: 0,
           paidMinor: input.hold ? 0 : paidMinor,
-          changeMinor: input.hold
-            ? 0
-            : tender.changeMinor,
+          changeMinor: input.hold ? 0 : tender.changeMinor,
           items: { create: quote.lines },
           payments: input.hold
             ? undefined
@@ -668,7 +713,12 @@ export class PosService {
           "Select an open register before resuming.",
         );
       const payments = input.payments ?? [];
-      const tender = await this.validateTender(tx, actor, payments, held.totalMinor);
+      const tender = await this.validateTender(
+        tx,
+        actor,
+        payments,
+        held.totalMinor,
+      );
       const updated = await tx.posOrder.update({
         where: { id: held.id },
         data: {
